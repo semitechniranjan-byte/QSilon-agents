@@ -183,6 +183,12 @@ export function Reports() {
           </p>
         )}
         <div className="mt-4 space-y-2">
+          {outcomeTotal > 0 && (
+            <div className="flex items-center gap-3 border-b border-slate-100 pb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+              <span className="flex-1">Outcome</span>
+              <span className="w-28 shrink-0 text-right">Calls · % of {outcomeTotal}</span>
+            </div>
+          )}
           {outcomeRows.map((d, i) => {
             const tone = dispositionTone(d.code);
             const pct = outcomeShares[i];
@@ -200,7 +206,10 @@ export function Reports() {
                     style={{ width: `${Math.max(pct, 1.5)}%` }}
                   />
                 </div>
-                <span className="w-24 shrink-0 text-right text-xs tabular-nums text-slate-600">
+                <span
+                  title={`${d.count} of ${outcomeTotal} calls = ${((d.count * 100) / outcomeTotal).toFixed(2)}%`}
+                  className="w-24 shrink-0 cursor-help text-right text-xs tabular-nums text-slate-600"
+                >
                   {d.count}
                   <span className="ml-1.5 text-slate-400">{formatShare(pct)}</span>
                 </span>

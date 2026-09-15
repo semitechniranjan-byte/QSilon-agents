@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { maskPhone } from "../components/Disposition";
 import { OUTCOME_GROUPS, countsForGroups } from "../components/Outcomes";
+import { formatShare, sharesOf } from "../components/shares";
 import { DateRangeFilter } from "../components/DateRangeFilter";
 import {
   describeRange,
@@ -237,11 +238,21 @@ export function Dashboard() {
     // analysis starts returning - are deliberately left off this page. Saying how many
     // there are keeps the tiles from looking like they should add up to the total.
     const onTiles = Object.values(grouped).reduce((n, v) => n + v, 0);
+    // Each tile as a share of every analysed call - "out of a hundred calls, this many" -
+    // with the codes off the tiles counted in, so all of it together is 100%.
+    const shares = sharesOf([
+      ...OUTCOME_GROUPS.map((g) => grouped[g.key] ?? 0),
+      analysed - onTiles,
+    ]);
+    const shareByGroupKey: Record<string, number> = Object.fromEntries(
+      OUTCOME_GROUPS.map((g, i) => [g.key, shares[i]]),
+    );
     return {
       analysed,
       reached,
       notReached,
       onTiles,
+      shareByGroupKey,
       otherCodes: analysed - onTiles,
       answerRate: analysed > 0 ? Math.round((reached / analysed) * 100) : null,
       byGroupKey: grouped,
@@ -378,7 +389,15 @@ export function Dashboard() {
                   className={`group rounded-xl border p-4 transition ${g.tile}`}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div className={`text-2xl font-semibold ${g.value}`}>{n}</div>
+                    <div
+                      className="flex items-baseline gap-2"
+                      title={`${n} of ${outcomes.analysed} analysed calls`}
+                    >
+                      <span className={`text-2xl font-semibold ${g.value}`}>{n}</span>
+                      <span className="text-sm font-medium text-slate-500">
+                        {formatShare(outcomes.shareByGroupKey[g.key] ?? 0)}
+                      </span>
+                    </div>
                     <span className="text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-slate-500">
                       <IconArrowRight size={14} />
                     </span>
