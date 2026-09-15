@@ -46,6 +46,9 @@ export const listSessionPage = (params: {
   search?: string;
   /** One or more disposition codes, comma separated - an outcome tile is a group of them. */
   disposition?: string;
+  /** YYYY-MM-DD, both ends inclusive. */
+  date_from?: string;
+  date_to?: string;
 }) => api.get<SessionPage>("/sessions", { params }).then((r) => r.data);
 
 /** Dial the same customer again on the same script, with the details already on file. */

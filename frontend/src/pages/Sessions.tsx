@@ -5,6 +5,7 @@ import { DispositionBadge, maskPhone } from "../components/Disposition";
 import { IconChevronRight, IconEye, IconSearch } from "../components/Icons";
 import { getDispositions, listSessionPage, recallSession } from "../api/endpoints";
 import { groupByKey } from "../components/Outcomes";
+import { describeRange } from "../components/DateRangeFilter";
 import { IconRefresh } from "../components/Icons";
 
 const PAGE_SIZE = 25;
@@ -21,6 +22,10 @@ export function Sessions() {
   // list behind the number on it.
   const [searchParams, setSearchParams] = useSearchParams();
   const outcome = groupByKey(searchParams.get("outcome"));
+  // ...and the period the dashboard was counting, so the list matches the tile.
+  const dateFrom = searchParams.get("date_from") ?? undefined;
+  const dateTo = searchParams.get("date_to") ?? undefined;
+  const hasPeriod = Boolean(dateFrom || dateTo);
 
   const [recalling, setRecalling] = useState<string | null>(null);
   const [recallNote, setRecallNote] = useState<string | null>(null);
@@ -48,10 +53,15 @@ export function Sessions() {
   }, [search]);
 
   // Any filter change invalidates the current offset.
-  useEffect(() => setPage(0), [statusFilter, directionFilter, debounced, outcome?.key]);
+  useEffect(
+    () => setPage(0),
+    [statusFilter, directionFilter, debounced, outcome?.key, dateFrom, dateTo],
+  );
 
   const { data, isLoading, error, isFetching } = useQuery({
-    queryKey: ["sessionPage", page, statusFilter, directionFilter, debounced, outcome?.key],
+    queryKey: [
+      "sessionPage", page, statusFilter, directionFilter, debounced, outcome?.key, dateFrom, dateTo,
+    ],
     queryFn: () =>
       listSessionPage({
         limit: PAGE_SIZE,
@@ -60,6 +70,8 @@ export function Sessions() {
         direction: directionFilter,
         search: debounced || undefined,
         disposition: outcome ? outcome.codes.join(",") : undefined,
+        date_from: dateFrom,
+        date_to: dateTo,
       }),
     // Keeps the current page on screen while the next loads, instead of flashing empty.
     placeholderData: keepPreviousData,
@@ -97,13 +109,20 @@ export function Sessions() {
                   {total.toLocaleString("en-IN")} call{total === 1 ? "" : "s"} recorded
                 </>
               )}
+              {hasPeriod && (
+                <span className="ml-1.5 text-xs text-slate-400">
+                  · {describeRange({ date_from: dateFrom, date_to: dateTo })}
+                </span>
+              )}
             </p>
           </div>
           <div className="flex items-center gap-3">
-            {outcome && (
+            {(outcome || hasPeriod) && (
               <button
                 onClick={() => {
                   searchParams.delete("outcome");
+                  searchParams.delete("date_from");
+                  searchParams.delete("date_to");
                   setSearchParams(searchParams, { replace: true });
                 }}
                 className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-50"

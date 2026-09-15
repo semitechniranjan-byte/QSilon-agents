@@ -1,9 +1,19 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { dispositionTone, maskPhone } from "../components/Disposition";
+import { Link, useSearchParams } from "react-router-dom";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { maskPhone } from "../components/Disposition";
 import { OUTCOME_GROUPS, countsForGroups } from "../components/Outcomes";
 import {
+  DateRangeFilter,
+  describeRange,
+  readRange,
+  resolveRange,
+  windowQuery,
+  writeRange,
+  type RangeChoice,
+} from "../components/DateRangeFilter";
+import {
+  getAnalyticsSummary,
   getHealth,
   getPromisesDue,
   recallSession,
@@ -106,6 +116,23 @@ export function Dashboard() {
   const { data: sessions } = useQuery({ queryKey: ["sessions"], queryFn: listSessions });
   const { data: queue } = useQuery({ queryKey: ["queue"], queryFn: listQueueCalls });
   const { data: campaigns } = useQuery({ queryKey: ["campaigns"], queryFn: listCampaigns });
+
+  // The period the page counts. Calls, dialer runs and outcomes follow it; the queue and
+  // the promises to chase are live and do not.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const range = readRange(searchParams);
+  const span = resolveRange(range);
+  const spanQuery = windowQuery(span);
+  const setRange = (next: RangeChoice) =>
+    setSearchParams(writeRange(searchParams, next), { replace: true });
+  // Counted in the database. The tiles used to be worked out in the browser from the
+  // latest 200 calls, which quietly stops being every call at call 201.
+  const { data: summary } = useQuery({
+    queryKey: ["dashboardSummary", span.date_from ?? "", span.date_to ?? ""],
+    queryFn: () => getAnalyticsSummary(span),
+    placeholderData: keepPreviousData,
+    refetchInterval: 30_000,
+  });
   const promiseClient = useQueryClient();
   const [calling, setCalling] = useState<string | null>(null);
   // Which of the three promise piles is open. A count nobody can open is a number to
@@ -138,8 +165,16 @@ export function Dashboard() {
   const queuedCalls = queue?.filter((q) => q.status === "queued" || q.status === "ready").length ?? 0;
 
   const campaignStats = useMemo(() => {
-    const list = campaigns ?? [];
-    const running = list.filter((c) => c.status === "running").length;
+    const all = campaigns ?? [];
+    // "Running now" is live whenever the run was started; the count is of runs started
+    // in the period.
+    const running = all.filter((c) => c.status === "running").length;
+    const list = all.filter((c) => {
+      if (!span.date_from && !span.date_to) return true;
+      const day = c.created_at?.slice(0, 10);
+      if (!day) return false;
+      return (!span.date_from || day >= span.date_from) && (!span.date_to || day <= span.date_to);
+    });
     const totals = list.reduce(
       (acc, c) => {
         acc.completed += c.stats?.completed ?? 0;
@@ -156,11 +191,8 @@ export function Dashboard() {
       connectRate: attempted > 0 ? Math.round((totals.completed / attempted) * 100) : null,
       ...totals,
     };
-  }, [campaigns]);
+  }, [campaigns, span.date_from, span.date_to]);
 
-  // What a collections client actually looks at: how many calls produced a promise to
-  // pay, how many were refused, how many never reached anyone. Derived from the sessions
-  // already loaded, so this costs no extra request.
   /**
    * The promises behind whichever pile is open, or the nearest few when none is.
    *
@@ -184,36 +216,28 @@ export function Dashboard() {
     );
   }, [promises, dueFilter]);
 
+  // What a collections client actually looks at: how many calls produced a promise to
+  // pay, how many were refused, how many never reached anyone - in the chosen period.
   const outcomes = useMemo(() => {
-    const counts = new Map<string, number>();
+    const counts: Record<string, number> = {};
     let analysed = 0;
-    for (const s of sessions ?? []) {
-      const code = (s as { disposition_code?: string | null }).disposition_code;
-      if (!code) continue;
-      analysed += 1;
-      const key = code.toUpperCase();
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+    for (const d of summary?.by_disposition ?? []) {
+      const code = d.code.toUpperCase();
+      counts[code] = (counts[code] ?? 0) + d.count;
+      analysed += d.count;
     }
-    const rows = [...counts.entries()]
-      .map(([code, count]) => ({ code, count, group: dispositionTone(code).group }))
-      .sort((a, b) => b.count - a.count);
     // Answer rate used to come off the campaign counters, which only know about calls a
     // campaign placed - 32 mostly-empty test campaigns reported 15% while the calls
     // themselves connected 73% of the time. Count the calls.
     const UNREACHED = ["NR", "ICR", "RNR", "LM"];
-    const notReached = rows
-      .filter((r) => UNREACHED.includes(r.code))
-      .reduce((n, r) => n + r.count, 0);
+    const notReached = UNREACHED.reduce((n, code) => n + (counts[code] ?? 0), 0);
     const reached = analysed - notReached;
-    const counts_by_code: Record<string, number> = {};
-    for (const [code, n] of counts.entries()) counts_by_code[code] = n;
-    const grouped = countsForGroups(counts_by_code);
+    const grouped = countsForGroups(counts);
     // Codes outside the six tiles - ones belonging to other use cases, or any new one the
     // analysis starts returning - are deliberately left off this page. Saying how many
     // there are keeps the tiles from looking like they should add up to the total.
     const onTiles = Object.values(grouped).reduce((n, v) => n + v, 0);
     return {
-      rows,
       analysed,
       reached,
       notReached,
@@ -222,7 +246,7 @@ export function Dashboard() {
       answerRate: analysed > 0 ? Math.round((reached / analysed) * 100) : null,
       byGroupKey: grouped,
     };
-  }, [sessions]);
+  }, [summary]);
 
   const capabilities: Capability[] = [
     {
@@ -263,23 +287,27 @@ export function Dashboard() {
       <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-sm">
         <div className="relative flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight text-slate-900">Dashboard</h1>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h1 className="text-xl font-semibold tracking-tight text-slate-900">Dashboard</h1>
+              <span
+                className={`flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-medium ${
+                  allReady
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border-amber-200 bg-amber-50 text-amber-700"
+                }`}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${allReady ? "bg-emerald-500" : "bg-amber-500"}`}
+                />
+                {allReady ? "All systems operational" : "Degraded"}
+              </span>
+            </div>
             <p className="mt-0.5 text-sm text-slate-500">
-              Live overview of your voice agent — calls, dialler runs and system health.
+              Calls, dialer runs and outcomes for the period on the right. The queue and the
+              promises to chase are always live.
             </p>
           </div>
-          <span
-            className={`flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-medium ${
-              allReady
-                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                : "border-amber-200 bg-amber-50 text-amber-700"
-            }`}
-          >
-            <span
-              className={`h-1.5 w-1.5 rounded-full ${allReady ? "bg-emerald-500" : "bg-amber-500"}`}
-            />
-            {allReady ? "All systems operational" : "Degraded"}
-          </span>
+          <DateRangeFilter value={range} onChange={setRange} />
         </div>
       </div>
 
@@ -287,10 +315,10 @@ export function Dashboard() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Conversations"
-          value={sessions?.length ?? "—"}
+          value={summary?.total ?? "—"}
           sub={`${activeSessions} currently active`}
           Icon={IconMessage}
-          to="/sessions"
+          to={spanQuery ? `/sessions?${spanQuery}` : "/sessions"}
         />
         <StatCard
           label="Dialer runs"
@@ -326,6 +354,7 @@ export function Dashboard() {
                 : outcomes.otherCodes > 0
                   ? `${outcomes.onTiles} of ${outcomes.analysed} analysed calls · ${outcomes.otherCodes} on other codes, in Auto Dialer`
                   : `Across ${outcomes.analysed} analysed call${outcomes.analysed === 1 ? "" : "s"}`}
+              {outcomes.analysed > 0 && ` · ${describeRange(span)}`}
             </p>
           </div>
           <Link
@@ -345,7 +374,7 @@ export function Dashboard() {
               return (
                 <Link
                   key={g.key}
-                  to={`/sessions?outcome=${g.key}`}
+                  to={`/sessions?outcome=${g.key}${spanQuery ? `&${spanQuery}` : ""}`}
                   className={`group rounded-xl border p-4 transition ${g.tile}`}
                 >
                   <div className="flex items-start justify-between gap-2">
@@ -362,7 +391,9 @@ export function Dashboard() {
           </div>
         ) : (
           <p className="mt-4 rounded-lg border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
-            No analysed calls yet. Make a test call and the outcome will show up here.
+            {spanQuery
+              ? "No analysed calls in this period."
+              : "No analysed calls yet. Make a test call and the outcome will show up here."}
           </p>
         )}
       </div>

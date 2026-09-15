@@ -671,6 +671,8 @@ async def list_sessions(
     direction: Optional[str] = None,
     search: Optional[str] = None,
     disposition: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ) -> dict:
     """One page of sessions, newest first.
 
@@ -680,7 +682,9 @@ async def list_sessions(
     the query rather than in the client so a search does not depend on having downloaded
     everything first.
     """
-    query: Dict[str, Any] = {}
+    # The dashboard counts a period, so the list a tile opens onto has to be the same period
+    # or the number on the tile and the rows behind it disagree.
+    query: Dict[str, Any] = dict(_session_window(date_from, date_to))
     # A dashboard card stands for a group of codes - a promise is PTP or FPTP - so the
     # filter takes a list and the card becomes one query rather than several.
     if disposition and disposition != "all":
