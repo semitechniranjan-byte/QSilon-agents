@@ -3,15 +3,15 @@ import { Link, useSearchParams } from "react-router-dom";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { maskPhone } from "../components/Disposition";
 import { OUTCOME_GROUPS, countsForGroups } from "../components/Outcomes";
+import { DateRangeFilter } from "../components/DateRangeFilter";
 import {
-  DateRangeFilter,
   describeRange,
   readRange,
   resolveRange,
   windowQuery,
   writeRange,
   type RangeChoice,
-} from "../components/DateRangeFilter";
+} from "../components/dateRange";
 import {
   getAnalyticsSummary,
   getHealth,

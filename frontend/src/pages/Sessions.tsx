@@ -5,7 +5,7 @@ import { DispositionBadge, maskPhone } from "../components/Disposition";
 import { IconChevronRight, IconEye, IconSearch } from "../components/Icons";
 import { getDispositions, listSessionPage, recallSession } from "../api/endpoints";
 import { groupByKey } from "../components/Outcomes";
-import { describeRange } from "../components/DateRangeFilter";
+import { describeRange } from "../components/dateRange";
 import { IconRefresh } from "../components/Icons";
 
 const PAGE_SIZE = 25;
