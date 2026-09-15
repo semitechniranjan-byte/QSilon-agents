@@ -80,7 +80,7 @@ export function Layout({ children }: { children: ReactNode }) {
             <IconHeadset size={18} />
           </span>
           <div className="leading-tight">
-            <div className="text-sm font-semibold tracking-tight text-white">Qsilon</div>
+            <div className="text-sm font-semibold tracking-tight text-white">QSilon</div>
             <div className="text-[11px] text-slate-400">
               Voice Agent · {role === "admin" ? "Admin" : "Operator"}
             </div>

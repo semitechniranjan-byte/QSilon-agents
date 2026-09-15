@@ -46,7 +46,7 @@ export function Login() {
           <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-lg bg-indigo-600 text-lg font-semibold text-white">
             Q
           </div>
-          <h1 className="text-xl font-semibold text-white">Qsilon Voice Console</h1>
+          <h1 className="text-xl font-semibold text-white">QSilon Voice Console</h1>
           <p className="mt-1 text-sm text-slate-400">Sign in to continue.</p>
         </div>
 

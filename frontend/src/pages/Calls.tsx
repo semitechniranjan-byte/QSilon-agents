@@ -43,7 +43,7 @@ function prettyKey(key: string): string {
 
 const KEY_EXAMPLES: Record<string, string> = {
   CUSTOMER_NAME: "Niranjan Kumar",
-  COMPANY_NAME: "Qsilon",
+  COMPANY_NAME: "QSilon",
   ORDER_ID: "ORD-4471",
   PROJECT_NAME: "Green Acres",
   AGENT_CALLBACK_NUMBER: "9876543210",
