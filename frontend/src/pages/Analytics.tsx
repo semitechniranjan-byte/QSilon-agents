@@ -8,6 +8,7 @@ import {
   startAnalyzeJob,
 } from "../api/endpoints";
 import { dispositionTone } from "../components/Disposition";
+import { formatShare, sharesOf } from "../components/shares";
 
 function isoDaysAgo(days: number): string {
   const d = new Date();
@@ -57,8 +58,14 @@ export function Analytics() {
   const days = summary?.by_day ?? [];
   const busiest = Math.max(1, ...days.map((d) => d.calls));
   const total = summary?.total ?? 0;
+  const outcomeRows = summary?.by_disposition ?? [];
+  // Shares are of the scored calls the list is made of - dividing by every call in the
+  // period would leave the column short of 100 whenever some calls were never scored.
+  const outcomeTotal = outcomeRows.reduce((s, d) => s + d.count, 0);
+  const outcomeShares = sharesOf(outcomeRows.map((d) => d.count));
   const languages = summary?.by_language ?? [];
-  const languageTotal = languages.reduce((s, l) => s + l.count, 0) || 1;
+  const languageTotal = languages.reduce((s, l) => s + l.count, 0);
+  const languageShares = sharesOf(languages.map((l) => l.count));
 
   return (
     <div className="space-y-5 pb-6">
@@ -150,10 +157,15 @@ export function Analytics() {
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
           <h2 className="text-sm font-semibold text-slate-900">Outcomes</h2>
+          {outcomeTotal > 0 && (
+            <p className="mt-0.5 text-xs text-slate-500">
+              Share of the {outcomeTotal.toLocaleString("en-IN")} scored calls in this period.
+            </p>
+          )}
           <div className="mt-4 space-y-2">
-            {(summary?.by_disposition ?? []).map((d) => {
+            {outcomeRows.map((d, i) => {
               const tone = dispositionTone(d.code);
-              const pct = total ? (d.count / total) * 100 : 0;
+              const pct = outcomeShares[i];
               return (
                 <div key={d.code} className="flex items-center gap-3">
                   <span className="w-12 shrink-0 font-mono text-[11px] font-semibold text-slate-700">
@@ -168,14 +180,23 @@ export function Analytics() {
                       style={{ width: `${Math.max(pct, 1.5)}%` }}
                     />
                   </div>
-                  <span className="w-16 shrink-0 text-right text-xs text-slate-600">
+                  <span className="w-24 shrink-0 text-right text-xs tabular-nums text-slate-600">
                     {d.count}
-                    <span className="ml-1 text-slate-400">{pct.toFixed(0)}%</span>
+                    <span className="ml-1.5 text-slate-400">{formatShare(pct)}</span>
                   </span>
                 </div>
               );
             })}
-            {!isLoading && (summary?.by_disposition ?? []).length === 0 && (
+            {outcomeTotal > 0 && (
+              <div className="flex items-center gap-3 border-t border-slate-100 pt-2 text-xs font-semibold text-slate-700">
+                <span className="flex-1">Total</span>
+                <span className="w-24 shrink-0 text-right tabular-nums">
+                  {outcomeTotal}
+                  <span className="ml-1.5 text-slate-400">100%</span>
+                </span>
+              </div>
+            )}
+            {!isLoading && outcomeRows.length === 0 && (
               <p className="text-xs text-slate-400">Nothing scored in this period.</p>
             )}
           </div>
@@ -183,15 +204,20 @@ export function Analytics() {
 
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-slate-900">Languages</h2>
+          {languageTotal > 0 && (
+            <p className="mt-0.5 text-xs text-slate-500">
+              Share of the {languageTotal.toLocaleString("en-IN")} calls with a language.
+            </p>
+          )}
           <div className="mt-4 space-y-3">
-            {languages.map((l) => {
-              const pct = (l.count / languageTotal) * 100;
+            {languages.map((l, i) => {
+              const pct = languageShares[i];
               return (
                 <div key={l.language}>
                   <div className="flex items-baseline justify-between text-xs">
                     <span className="font-medium capitalize text-slate-700">{l.language}</span>
-                    <span className="text-slate-500">
-                      {l.count} <span className="text-slate-400">{pct.toFixed(0)}%</span>
+                    <span className="tabular-nums text-slate-500">
+                      {l.count} <span className="ml-1 text-slate-400">{formatShare(pct)}</span>
                     </span>
                   </div>
                   <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-100">
