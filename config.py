@@ -40,6 +40,12 @@ class Settings:
     # Naming a model lets the backup sit on the same provider as the primary, so a
     # single-vendor deployment still gets a second attempt when one request stalls.
     LLM_BACKUP_MODEL: str = os.getenv("LLM_BACKUP_MODEL", "")
+    # Speak each sentence as the model writes it rather than waiting for the last word.
+    # A switch, because it is the most latency-critical path in the product: turn it off
+    # and every reply goes back to being spoken in one piece.
+    LLM_STREAM_REPLIES: bool = os.getenv("LLM_STREAM_REPLIES", "true").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
 
     CEREBRAS_API_KEY: str = os.getenv("CEREBRAS_API_KEY", "")
     CEREBRAS_MODEL: str = os.getenv("CEREBRAS_MODEL", "llama-3.3-70b")

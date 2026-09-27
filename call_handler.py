@@ -67,6 +67,33 @@ INTERRUPTION_RECOVERY_LINE = "Ji, boliye?"
 RECOVERY_SPEECH_QUIET_SECONDS = 1.2
 RECOVERY_MAX_REARMS = 4
 
+# ---- Speaking while the model is still writing ---------------------------------------
+# A reply used to be spoken only once its last word had been generated, so the caller sat
+# through the whole generation - about 600ms of the ~800 they wait per turn. The reply is
+# streamed now and each finished sentence is spoken as it lands. A piece is only sent once
+# it ends a sentence and is long enough to be worth its own request; shorter than that and
+# the caller hears a clipped fragment with a gap behind it.
+SPEAK_SENTENCE_ENDS = ".?!।"
+SPEAK_MIN_CHARS = 12
+
+
+def _take_speakable(buffer: str) -> tuple:
+    """Split a part-written reply into (what can be spoken now, what must wait).
+
+    Greedy on purpose: everything up to the LAST sentence end goes, so a model that writes
+    two sentences in one burst does not cost two TTS requests.
+    """
+    cut = -1
+    for index, char in enumerate(buffer):
+        if char in SPEAK_SENTENCE_ENDS:
+            cut = index
+    if cut < 0:
+        return "", buffer
+    head, tail = buffer[: cut + 1], buffer[cut + 1:]
+    if len(head.strip()) < SPEAK_MIN_CHARS:
+        return "", buffer
+    return head.strip(), tail
+
 # ---- Background-noise defences -------------------------------------------------------
 # Indian mobile calls are frequently made from traffic, shops and rooms with a TV on. A
 # fixed threshold either ignores a softly-spoken caller or lets ambient noise through as
@@ -198,6 +225,10 @@ class CallHandler:
         self._spoken_bytes = 0
         self._first_audio_ms: Optional[int] = None
         self._speak_started = 0.0
+        # A turn can now be spoken in several pieces, so "how long the caller waited" is
+        # measured from the start of the turn to the first audio of any of them.
+        self._turn_started_at: Optional[float] = None
+        self._reply_first_audio_ms: Optional[int] = None
         self.first_silence_time = 12
         self.second_silence_time = 12
         self.call_end_delay = 2
@@ -503,6 +534,11 @@ class CallHandler:
             return
         if self._first_audio_ms is None:
             self._first_audio_ms = int((time.monotonic() - self._speak_started) * 1000)
+        # First audio of the turn, whichever piece of the reply it belongs to. This is what
+        # the caller actually waited, and with a streamed reply it is not the same as the
+        # time the last piece took to synthesise.
+        if self._reply_first_audio_ms is None and self._turn_started_at is not None:
+            self._reply_first_audio_ms = int((time.monotonic() - self._turn_started_at) * 1000)
         self._out_buffer.extend(chunk)
         self._spoken_bytes += len(chunk)
         while len(self._out_buffer) >= OUT_FRAME_BYTES:
@@ -1311,6 +1347,125 @@ class CallHandler:
         )
         return None
 
+    async def _speak_reply_as_written(self, user_input: str) -> Optional[str]:
+        """Speak the reply while the model is still writing it; returns all that was said.
+
+        Returns None when this call cannot stream - streaming switched off, or a template
+        that asks the model for JSON - and the caller then asks for the whole reply the old
+        way.
+
+        The hedge survives: if nothing has arrived from the primary by the hedge window the
+        backup is started alongside it, and whichever produces words first is the one the
+        caller hears. After that the race is over - a spoken sentence cannot be unsaid - so
+        the loser's words are dropped.
+        """
+        if not settings.LLM_STREAM_REPLIES or not getattr(self.llm, "supports_streaming", False):
+            return None
+
+        loop = asyncio.get_running_loop()
+        history = list(self.conversation)
+        queue: asyncio.Queue = asyncio.Queue()
+        workers: Dict[str, asyncio.Task] = {}
+        pending = set()
+
+        async def pump(client, label: str) -> None:
+            try:
+                async for piece in client.stream_response(user_input, conversation_history=history):
+                    await queue.put((label, piece))
+                await queue.put((label, None))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await queue.put((label, exc))
+
+        def start(client, label: str) -> None:
+            workers[label] = asyncio.ensure_future(pump(client, label))
+            pending.add(label)
+
+        start(self.llm, "primary")
+        winner: Optional[str] = None
+        buffer = ""
+        said: List[str] = []
+        audio_bytes = 0
+        deadline = loop.time() + LLM_TOTAL_DEADLINE_SECONDS
+        hedged = False
+        finished = False
+
+        try:
+            while pending:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    logger.warning(
+                        "LLM [%s] streamed reply still unfinished at %.1fs; speaking what came",
+                        self.session_id, LLM_TOTAL_DEADLINE_SECONDS,
+                    )
+                    break
+                window = remaining if (hedged or winner) else min(remaining, LLM_HEDGE_AFTER_SECONDS)
+                try:
+                    label, item = await asyncio.wait_for(queue.get(), timeout=window)
+                except asyncio.TimeoutError:
+                    if hedged or winner:
+                        continue
+                    hedged = True
+                    backup = self._backup_llm()
+                    if backup is not None and getattr(backup, "supports_streaming", False):
+                        logger.warning(
+                            "LLM [%s] primary silent past %.1fs; racing the backup",
+                            self.session_id, LLM_HEDGE_AFTER_SECONDS,
+                        )
+                        start(backup, "backup")
+                    continue
+
+                if isinstance(item, Exception):
+                    pending.discard(label)
+                    logger.warning("LLM [%s] %s stream failed: %s", self.session_id, label, item)
+                    continue
+                if item is None:
+                    pending.discard(label)
+                    if label == winner:
+                        finished = True
+                        break
+                    continue
+                if winner is None:
+                    winner = label
+                    if label == "backup":
+                        logger.warning(
+                            "LLM [%s] backup provider spoke first", self.session_id
+                        )
+                elif label != winner:
+                    continue
+
+                buffer += item
+                chunk, buffer = _take_speakable(buffer)
+                if not chunk:
+                    continue
+                await self._speak(chunk)
+                said.append(chunk)
+                audio_bytes += self._spoken_bytes
+                if self.interrupted_mid_speech or self.call_ending or self.should_end_call:
+                    break
+        finally:
+            for task in workers.values():
+                task.cancel()
+
+        # Whatever is left over is only worth speaking if the model got to the end of its
+        # reply: a model often finishes without punctuation. If the stream broke or ran out
+        # of time part way, the leftover is half a sentence - the caller is better served
+        # by the complete sentences they already heard, or by the fallback path if they
+        # heard nothing at all.
+        tail = buffer.strip()
+        if finished and tail and not (self.interrupted_mid_speech or self.call_ending or self.should_end_call):
+            await self._speak(tail)
+            said.append(tail)
+            audio_bytes += self._spoken_bytes
+
+        if not said:
+            return None
+        # The sign-off wait measures the audio queued for the reply, which was every piece
+        # of it rather than only the last.
+        self._spoken_bytes = audio_bytes
+        return " ".join(part.strip() for part in said if part.strip()).strip()
+
     def _backup_llm(self) -> Optional[GroqLLMService]:
         """A second client for the hedge, built once per call and only if one is needed."""
         if self._backup is not None:
@@ -1559,12 +1714,22 @@ class CallHandler:
             logger.warning("LLM [%s] user=%r", self.session_id, user_input[:120])
 
             t_llm = time.monotonic()
-            response_text = await self._llm_reply(user_input)
-            stalled = response_text is None
-            if stalled:
-                logger.warning("LLM [%s] both providers failed; stalling", self.session_id)
-                response_text = LLM_STALL_LINE
-            llm_ms = int((time.monotonic() - t_llm) * 1000)
+            self._turn_started_at = t_llm
+            self._reply_first_audio_ms = None
+            # Spoken sentence by sentence as the model writes it. None means this call
+            # cannot stream, and the whole reply is fetched and spoken in one piece.
+            response_text = await self._speak_reply_as_written(user_input)
+            streamed = response_text is not None
+            if not streamed:
+                response_text = await self._llm_reply(user_input)
+                if response_text is None:
+                    logger.warning("LLM [%s] both providers failed; stalling", self.session_id)
+                    response_text = LLM_STALL_LINE
+                await self._speak(response_text)
+            turn_ms = int((time.monotonic() - t_llm) * 1000)
+            waited = self._reply_first_audio_ms
+            if waited is None:
+                waited = turn_ms
 
             asyncio.create_task(
                 self.db.add_conversation_message(self.session_id, "assistant", response_text)
@@ -1573,15 +1738,10 @@ class CallHandler:
             self.conversation.append({"role": "assistant", "content": response_text})
             self._last_spoken_text = response_text
 
-            t_tts = time.monotonic()
-            await self._speak(response_text)
-            tts_ms = int((time.monotonic() - t_tts) * 1000)
-            first_audio = self._first_audio_ms if self._first_audio_ms is not None else tts_ms
             logger.warning(
-                "TURN [%s] llm=%sms tts_first_audio=%sms | CALLER WAITED %sms "
-                "(tts_total=%sms) reply=%r",
-                self.session_id, llm_ms, first_audio, llm_ms + first_audio,
-                tts_ms, (response_text or "")[:70],
+                "TURN [%s] %s | CALLER WAITED %sms (whole reply took %sms) reply=%r",
+                self.session_id, "streamed" if streamed else "one-piece",
+                waited, turn_ms, (response_text or "")[:70],
             )
 
             if self._is_closing_line(response_text):

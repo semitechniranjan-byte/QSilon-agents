@@ -197,6 +197,71 @@ class GroqLLMService:
             logger.warning("Could not load conversation history: %s", exc)
             return []
 
+    def _build_messages(
+        self, user_input: str, format_values: Dict, conversation_history: Optional[List[Dict]]
+    ) -> List[Dict]:
+        """The system prompt, the call so far, and what the caller just said."""
+        system_prompt = self._format_system_prompt(self.system_prompt_template, format_values)
+        if self.dynamic_fields:
+            required_fields = list(self.dynamic_fields.keys()) + ["response"]
+            system_prompt = (
+                f"{system_prompt}\n"
+                f"Return a concise JSON object with the following fields: {', '.join(required_fields)}."
+            )
+
+        messages = [{"role": "system", "content": system_prompt}]
+        for item in conversation_history or []:
+            role = item.get("role", "")
+            content = item.get("content", "")
+            if role in {"user", "assistant"} and content:
+                messages.append({"role": role, "content": content})
+        messages.append(
+            {"role": "user", "content": self._format_prompt_text(user_input, format_values)}
+        )
+        return messages
+
+    @property
+    def supports_streaming(self) -> bool:
+        """Whether this reply can be spoken while it is still being written.
+
+        Not when dynamic fields are configured: the model is then asked for a JSON object,
+        and half a JSON object cannot be read out loud.
+        """
+        return bool(self.ready and self.client and not self.dynamic_fields)
+
+    async def stream_response(
+        self,
+        user_input: str,
+        format_values: Optional[Dict] = None,
+        conversation_history: Optional[List[Dict]] = None,
+    ):
+        """Yield the reply in pieces, as the model writes it.
+
+        Waiting for the last word before speaking the first one costs the caller the whole
+        generation - about 600ms of the 800 they wait. Whoever consumes this speaks each
+        finished sentence as it lands instead. Errors are raised, not swallowed: the caller
+        falls back to the plain request, which has its own fallback text.
+        """
+        effective_format_values = format_values or self.format_values or {}
+        if conversation_history is None:
+            conversation_history = await self.get_conversation_history()
+        self._validate()
+
+        stream = await self.client.chat.completions.create(
+            model=self.model,
+            messages=self._build_messages(user_input, effective_format_values, conversation_history),
+            temperature=0.2,
+            max_tokens=250,
+            stream=True,
+        )
+        async for chunk in stream:
+            choices = getattr(chunk, "choices", None)
+            if not choices:
+                continue
+            piece = getattr(choices[0].delta, "content", None)
+            if piece:
+                yield piece
+
     async def generate_response(self, user_input: str, format_values: Optional[Dict] = None, conversation_history: Optional[List[Dict]] = None) -> str:
         effective_format_values = format_values or self.format_values or {}
         if conversation_history is None:
@@ -208,22 +273,7 @@ class GroqLLMService:
             logger.warning("Groq not available, using fallback response: %s", exc)
             return self._build_fallback_response(user_input, effective_format_values)
 
-        system_prompt = self._format_system_prompt(self.system_prompt_template, effective_format_values)
-        if self.dynamic_fields:
-            required_fields = list(self.dynamic_fields.keys()) + ["response"]
-            system_prompt = (
-                f"{system_prompt}\n"
-                f"Return a concise JSON object with the following fields: {', '.join(required_fields)}."
-            )
-
-        formatted_user_input = self._format_prompt_text(user_input, effective_format_values)
-        messages = [{"role": "system", "content": system_prompt}]
-        for item in conversation_history:
-            role = item.get("role", "")
-            content = item.get("content", "")
-            if role in {"user", "assistant"} and content:
-                messages.append({"role": role, "content": content})
-        messages.append({"role": "user", "content": formatted_user_input})
+        messages = self._build_messages(user_input, effective_format_values, conversation_history)
 
         try:
             response = await self.client.chat.completions.create(
