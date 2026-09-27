@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
-import { DispositionBadge, maskPhone } from "../components/Disposition";
+import { DispositionBadge } from "../components/Disposition";
+import { PhoneNumber } from "../components/PhoneNumber";
 import { IconChevronRight, IconEye, IconSearch } from "../components/Icons";
 import { getDispositions, listSessionPage, recallSession } from "../api/endpoints";
 import { groupByKey } from "../components/Outcomes";
@@ -185,7 +186,7 @@ export function Sessions() {
               {rows.map((s) => (
                 <tr key={s.session_id} className="transition hover:bg-indigo-50/40">
                   <td className="px-4 py-2.5">
-                    <div className="font-mono text-slate-800">{maskPhone(s.phone_number)}</div>
+                    <div className="font-mono text-slate-800"><PhoneNumber value={s.phone_number} /></div>
                     <div className="font-mono text-[10px] text-slate-400" title={s.session_id}>
                       {s.session_id.slice(-8)}
                     </div>

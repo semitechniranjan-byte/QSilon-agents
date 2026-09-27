@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { DispositionBadge, maskPhone } from "../components/Disposition";
+import { DispositionBadge } from "../components/Disposition";
+import { PhoneNumber } from "../components/PhoneNumber";
 import { useParams, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -86,7 +87,7 @@ export function SessionDetail() {
               session id is plumbing and belongs underneath. */}
           <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
             <h1 className="font-mono text-xl font-semibold text-slate-900">
-              {maskPhone(session?.phone_number)}
+              <PhoneNumber value={session?.phone_number} />
             </h1>
             <button
               onClick={exportOne}

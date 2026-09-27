@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { maskPhone } from "../components/Disposition";
+import { PhoneNumber } from "../components/PhoneNumber";
 import { OUTCOME_GROUPS, countsForGroups } from "../components/Outcomes";
 import { formatShare, sharesOf } from "../components/shares";
 import { DateRangeFilter } from "../components/DateRangeFilter";
@@ -489,7 +489,7 @@ export function Dashboard() {
             {shownPromises.map((p) => (
               <div key={p.session_id} className="flex items-center gap-3 py-2.5">
                 <span className="w-24 shrink-0 font-mono text-xs text-slate-700">
-                  {maskPhone(p.phone_number)}
+                  <PhoneNumber value={p.phone_number} />
                 </span>
                 <span className="w-20 shrink-0 text-xs text-slate-500">
                   {new Date(p.due).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
