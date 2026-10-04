@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { OUTCOME_GROUPS, countsForGroups } from "../components/Outcomes";
@@ -57,7 +57,7 @@ function StatCard({
   to?: string;
 }) {
   const body = (
-    <div className="group h-full rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-300 hover:shadow">
+    <div className="group h-full rounded-lg border border-slate-200 bg-white p-5 shadow-sm transition hover:border-slate-300 hover:shadow">
       <div className="flex items-start justify-between">
         <span className="flex h-9 w-9 items-center justify-center rounded-md bg-slate-100 text-slate-600">
           <Icon size={17} />
@@ -68,7 +68,7 @@ function StatCard({
           </span>
         )}
       </div>
-      <div className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">{value}</div>
+      <div className="mt-4 text-2xl font-semibold tracking-tight text-slate-900">{value}</div>
       <div className="mt-1 text-sm font-medium text-slate-700">{label}</div>
       {sub && <div className="mt-0.5 text-xs text-slate-400">{sub}</div>}
     </div>
@@ -131,8 +131,6 @@ export function Dashboard() {
     placeholderData: keepPreviousData,
     refetchInterval: 30_000,
   });
-
-  const [tab, setTab] = useState<"outcomes" | "health" | "actions">("outcomes");
 
   const activeSessions = sessions?.filter((s) => s.active).length ?? 0;
   const queuedCalls = queue?.filter((q) => q.status === "queued" || q.status === "ready").length ?? 0;
@@ -242,7 +240,7 @@ export function Dashboard() {
   const allReady = capabilities.every((c) => c.ready);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {/* Hero */}
       <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-sm">
         <div className="relative flex flex-wrap items-start justify-between gap-4">
@@ -303,144 +301,121 @@ export function Dashboard() {
         />
       </div>
 
-      {/* The three panels share one card behind tabs, so the whole dashboard fits on one
-        screen without scrolling. */}
-      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="flex gap-1 border-b border-slate-200 px-3">
-          {([
-            { key: "outcomes", label: "Call outcomes" },
-            { key: "health", label: "System health" },
-            { key: "actions", label: "Quick actions" },
-          ] as const).map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              className={`-mb-px flex items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium transition ${
-                tab === t.key
-                  ? "border-indigo-600 text-slate-900"
-                  : "border-transparent text-slate-500 hover:text-slate-800"
-              }`}
-            >
-              {t.label}
-              {t.key === "health" && (
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${allReady ? "bg-emerald-500" : "bg-amber-500"}`}
-                />
-              )}
-            </button>
-          ))}
+      {/* Call outcomes */}
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Call outcomes</h2>
+            <p className="text-xs text-slate-400">
+              {outcomes.analysed === 0
+                ? "Outcomes appear here once calls have been analysed"
+                : outcomes.otherCodes > 0
+                  ? `${outcomes.onTiles} of ${outcomes.analysed} analysed calls · ${outcomes.otherCodes} on other codes, in Auto Dialer`
+                  : `Across ${outcomes.analysed} analysed call${outcomes.analysed === 1 ? "" : "s"}`}
+              {outcomes.analysed > 0 && ` · ${describeRange(span)}`}
+            </p>
+          </div>
+          <Link
+            to="/sessions"
+            className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
+          >
+            All conversations
+          </Link>
         </div>
 
-        {tab === "outcomes" && (
-          <div className="p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-xs text-slate-400">
-                {outcomes.analysed === 0
-                  ? "Outcomes appear here once calls have been analysed"
-                  : outcomes.otherCodes > 0
-                    ? `${outcomes.onTiles} of ${outcomes.analysed} analysed calls · ${outcomes.otherCodes} on other codes, in Auto Dialer`
-                    : `Across ${outcomes.analysed} analysed call${outcomes.analysed === 1 ? "" : "s"}`}
-                {outcomes.analysed > 0 && ` · ${describeRange(span)}`}
-              </p>
-              <Link
-                to="/sessions"
-                className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
-              >
-                All conversations
-              </Link>
-            </div>
-
-            {outcomes.analysed > 0 ? (
-              /* Six tiles, each a link into the calls behind it. A number nobody can act on
-                 is just decoration; from the list a caller can be dialled again or read. */
-              <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
-                {OUTCOME_GROUPS.map((g) => {
-                  const n = outcomes.byGroupKey[g.key] ?? 0;
-                  return (
-                    <Link
-                      key={g.key}
-                      to={`/sessions?outcome=${g.key}${spanQuery ? `&${spanQuery}` : ""}`}
-                      className={`group rounded-xl border p-4 transition ${g.tile}`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div
-                          className="flex items-baseline gap-2"
-                          title={`${n} of ${outcomes.analysed} analysed calls`}
-                        >
-                          <span className={`text-2xl font-semibold ${g.value}`}>{n}</span>
-                          <span className="text-sm font-medium text-slate-500">
-                            {formatShare(outcomes.shareByGroupKey[g.key] ?? 0)}
-                          </span>
-                        </div>
-                        <span className="text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-slate-500">
-                          <IconArrowRight size={14} />
-                        </span>
-                      </div>
-                      <div className="mt-0.5 text-xs font-medium text-slate-700">{g.label}</div>
-                      <div className="text-[11px] text-slate-400">{g.hint}</div>
-                    </Link>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="mt-4 rounded-lg border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
-                {spanQuery
-                  ? "No analysed calls in this period."
-                  : "No analysed calls yet. Make a test call and the outcome will show up here."}
-              </p>
-            )}
-          </div>
-        )}
-
-        {tab === "health" && (
-          <div className="p-5">
-            <div className="flex items-center justify-between">
-              <p className="text-xs text-slate-400">Core capabilities powering every call</p>
-              <Link
-                to="/settings"
-                className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
-              >
-                Settings
-              </Link>
-            </div>
-            <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
-              {capabilities.map((c) => (
-                <CapabilityRow key={c.key} capability={c} />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {tab === "actions" && (
-          <div className="p-5">
-            <p className="text-xs text-slate-400">Jump straight into the common tasks</p>
-            <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
-              {[
-                { to: "/campaigns", Icon: IconCampaign, label: "Start a dialer run", hint: "Pick a list and language" },
-                { to: "/templates", Icon: IconTemplate, label: "Edit prompts", hint: "Use cases and languages" },
-                { to: "/datasheets", Icon: IconTable, label: "Upload a call list", hint: "Add contacts to call" },
-                { to: "/sessions", Icon: IconMessage, label: "Review transcripts", hint: "Listen back to calls" },
-              ].map((a) => (
+        {outcomes.analysed > 0 ? (
+          /* Six tiles, each a link into the calls behind it. A number nobody can act on
+             is just decoration; from the list a caller can be dialled again or read. */
+          <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
+            {OUTCOME_GROUPS.map((g) => {
+              const n = outcomes.byGroupKey[g.key] ?? 0;
+              return (
                 <Link
-                  key={a.to}
-                  to={a.to}
-                  className="group flex items-center gap-3 rounded-md border border-slate-200 px-3 py-2.5 transition hover:bg-slate-50"
+                  key={g.key}
+                  to={`/sessions?outcome=${g.key}${spanQuery ? `&${spanQuery}` : ""}`}
+                  className={`group rounded-xl border p-4 transition ${g.tile}`}
                 >
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600">
-                    <a.Icon size={16} />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-slate-800">{a.label}</div>
-                    <div className="truncate text-xs text-slate-400">{a.hint}</div>
+                  <div className="flex items-start justify-between gap-2">
+                    <div
+                      className="flex items-baseline gap-2"
+                      title={`${n} of ${outcomes.analysed} analysed calls`}
+                    >
+                      <span className={`text-2xl font-semibold ${g.value}`}>{n}</span>
+                      <span className="text-sm font-medium text-slate-500">
+                        {formatShare(outcomes.shareByGroupKey[g.key] ?? 0)}
+                      </span>
+                    </div>
+                    <span className="text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-slate-500">
+                      <IconArrowRight size={14} />
+                    </span>
                   </div>
-                  <span className="text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-slate-500">
-                    <IconArrowRight size={16} />
-                  </span>
+                  <div className="mt-0.5 text-xs font-medium text-slate-700">{g.label}</div>
+                  <div className="text-[11px] text-slate-400">{g.hint}</div>
                 </Link>
-              ))}
-            </div>
+              );
+            })}
           </div>
+        ) : (
+          <p className="mt-4 rounded-lg border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
+            {spanQuery
+              ? "No analysed calls in this period."
+              : "No analysed calls yet. Make a test call and the outcome will show up here."}
+          </p>
         )}
+      </div>
+
+      {/* System health */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">System health</h2>
+              <p className="text-xs text-slate-400">Core capabilities powering every call</p>
+            </div>
+            <Link
+              to="/settings"
+              className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
+            >
+              Settings
+            </Link>
+          </div>
+          <div className="mt-3 space-y-2">
+            {capabilities.map((c) => (
+              <CapabilityRow key={c.key} capability={c} />
+            ))}
+          </div>
+        </div>
+
+        {/* Quick actions */}
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-slate-900">Quick actions</h2>
+          <p className="text-xs text-slate-400">Jump straight into the common tasks</p>
+          <div className="mt-3 space-y-2">
+            {[
+              { to: "/campaigns", Icon: IconCampaign, label: "Start a dialer run", hint: "Pick a list and language" },
+              { to: "/templates", Icon: IconTemplate, label: "Edit prompts", hint: "Use cases and languages" },
+              { to: "/datasheets", Icon: IconTable, label: "Upload a call list", hint: "Add contacts to call" },
+              { to: "/sessions", Icon: IconMessage, label: "Review transcripts", hint: "Listen back to calls" },
+            ].map((a) => (
+              <Link
+                key={a.to}
+                to={a.to}
+                className="group flex items-center gap-3 rounded-md border border-slate-200 px-3 py-2.5 transition hover:bg-slate-50"
+              >
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600">
+                  <a.Icon size={16} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-slate-800">{a.label}</div>
+                  <div className="truncate text-xs text-slate-400">{a.hint}</div>
+                </div>
+                <span className="text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-slate-500">
+                  <IconArrowRight size={16} />
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
