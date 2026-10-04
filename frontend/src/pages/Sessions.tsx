@@ -8,6 +8,7 @@ import {
   getDispositions,
   getRecallBatch,
   listSessionPage,
+  previewRecallBatch,
   recallSession,
   startRecallBatch,
   stopRecallBatch,
@@ -122,37 +123,74 @@ export function Sessions() {
   const batchRunning = batch?.status === "running";
   const batchDone = batch ? batch.placed + batch.failed : 0;
 
+  const failure = (err: unknown) =>
+    (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+    (err as Error).message;
+
   const callEveryone = async () => {
-    const who = outcome ? outcome.label.toLowerCase() : "this list";
-    const ok = await dialog.confirm(`Call everyone in ${who}?`, {
-      body:
-        "One call per customer: a number listed several times is called once. Numbers on " +
-        "the do-not-call list are skipped, calls go out at the same pace as a dialler run, " +
-        "and you can stop it at any point.",
-      okLabel: "Call them",
+    setBatchNote(null);
+    const filters = {
+      disposition: outcome ? outcome.codes.join(",") : undefined,
+      status: statusFilter,
+      direction: directionFilter,
+      search: debounced || undefined,
+      date_from: dateFrom,
+      date_to: dateTo,
+    };
+
+    // Ask first how many people this is. "Call everyone" on 40 promises places 7 calls
+    // when those 40 are 7 customers tried several times each, and nobody should find that
+    // out afterwards.
+    let preview;
+    try {
+      preview = await previewRecallBatch(filters);
+    } catch (err) {
+      setBatchNote(failure(err));
+      return;
+    }
+    if (preview.customers === 0) {
+      setBatchNote(
+        preview.skipped_dnc
+          ? `Nobody to call — ${preview.skipped_dnc} on the do-not-call list.`
+          : "Nobody to call in this list.",
+      );
+      return;
+    }
+    if (!preview.within_calling_hours) {
+      const [open, close] = preview.calling_hours;
+      setBatchNote(`Calls only go out between ${open}:00 and ${close}:00.`);
+      return;
+    }
+
+    const many = preview.customers === 1 ? "" : "s";
+    const body = [
+      `${preview.customers} customer${many} will be called, one call each.`,
+      preview.calls_in_list > preview.customers
+        ? `The list shows ${preview.calls_in_list} calls — the same customer appears once per attempt.`
+        : "",
+      preview.skipped_dnc ? `${preview.skipped_dnc} skipped as do-not-call.` : "",
+      preview.capped ? "Only the newest customers go in one batch." : "",
+      "Calls go out at the pace of a dialler run, and you can stop it at any point.",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    const ok = await dialog.confirm(`Call ${preview.customers} customer${many}?`, {
+      body,
+      okLabel: `Call ${preview.customers}`,
     });
     if (!ok) return;
-    setBatchNote(null);
+
     try {
-      const run = await startRecallBatch({
-        disposition: outcome ? outcome.codes.join(",") : undefined,
-        status: statusFilter,
-        direction: directionFilter,
-        search: debounced || undefined,
-        date_from: dateFrom,
-        date_to: dateTo,
-      });
+      const run = await startRecallBatch(filters);
       setBatchId(run.run_id);
       setBatchNote(
         `Calling ${run.total} customer${run.total === 1 ? "" : "s"}` +
-          (run.total < total ? ` (${total} calls in the list, repeats merged)` : "") +
           (run.skipped_dnc ? `, ${run.skipped_dnc} skipped as do-not-call` : "") +
           ".",
       );
     } catch (err) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data
-        ?.detail;
-      setBatchNote(detail || (err as Error).message);
+      setBatchNote(failure(err));
     }
   };
 

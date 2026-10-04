@@ -77,6 +77,21 @@ export type RecallBatchFilters = {
   limit?: number;
 };
 
+/** What a batch would do, before it does it. */
+export interface RecallBatchPreview {
+  /** People who would be rung - one call each. */
+  customers: number;
+  /** Rows in the list behind them; a customer appears once per attempt. */
+  calls_in_list: number;
+  skipped_dnc: number;
+  /** The filter holds more people than one batch may take. */
+  capped: boolean;
+  within_calling_hours: boolean;
+  calling_hours: number[];
+}
+
+export const previewRecallBatch = (filters: RecallBatchFilters) =>
+  api.post<RecallBatchPreview>("/sessions/recall-batch/preview", filters).then((r) => r.data);
 export const startRecallBatch = (filters: RecallBatchFilters) =>
   api.post<RecallBatch>("/sessions/recall-batch", filters).then((r) => r.data);
 export const getRecallBatch = (runId: string) =>

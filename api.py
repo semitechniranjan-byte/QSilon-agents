@@ -795,7 +795,12 @@ async def recall_session(session_id: str) -> dict:
 # works it at the pace the pool allows, under the same do-not-call list, calling hours and
 # concurrency limit every other call obeys.
 RECALL_RUNS_KEPT = 20
+# People called in one batch, and how many rows may be read to find them. The two are not
+# the same number: one customer appears once per attempt, so 40 promises in the list can be
+# 7 people. The scan ceiling only exists so a filter covering a hundred thousand calls
+# cannot read the whole collection.
 RECALL_BATCH_MAX = 500
+RECALL_SCAN_MAX = 5000
 
 # In memory, like the dialler runs: one instance, and a batch is not worth a collection.
 _recall_runs: Dict[str, Dict[str, Any]] = {}
@@ -828,7 +833,12 @@ def _recall_run_view(run: Dict[str, Any]) -> dict:
 
 
 async def _recall_targets(payload: RecallBatchRequest) -> tuple:
-    """The newest call per customer in the filter, minus anyone who must not be dialled."""
+    """The newest call per customer in the filter, minus anyone who must not be dialled.
+
+    Returns (targets, skipped_dnc, rows_seen). The limit counts PEOPLE: reading only the
+    newest 200 rows would quietly drop the oldest customers of a list where everyone has
+    been tried three times.
+    """
     query = _session_filter_query(
         status=payload.status, direction=payload.direction, search=payload.search,
         disposition=payload.disposition, date_from=payload.date_from, date_to=payload.date_to,
@@ -837,18 +847,21 @@ async def _recall_targets(payload: RecallBatchRequest) -> tuple:
         "session_id": 1, "phone_number": 1, "format_values": 1, "dynamic_fields": 1,
         "use_case": 1, "language": 1, "created_at": 1,
     }
-    limit = max(1, min(payload.limit, RECALL_BATCH_MAX))
-    cursor = handler.db.sessions.find(query, fields).sort("created_at", -1).limit(limit)
+    wanted = max(1, min(payload.limit, RECALL_BATCH_MAX))
+    cursor = handler.db.sessions.find(query, fields).sort("created_at", -1).limit(RECALL_SCAN_MAX)
 
     seen = set()
     targets: list = []
     skipped_dnc = 0
+    rows_seen = 0
     async for doc in cursor:
+        rows_seen += 1
         number = (doc.get("phone_number") or "").strip()
         if not number or number == "unknown":
             continue
         # One customer, one call: a number that was tried four times appears four times in
-        # the list, and the operator means to ring the person, not the attempts.
+        # the list, and the operator means to ring the person, not the attempts. The newest
+        # row wins, so the call carries the details the customer was last called with.
         key = handler.db.normalise_number(number)
         if key in seen:
             continue
@@ -857,7 +870,9 @@ async def _recall_targets(payload: RecallBatchRequest) -> tuple:
             skipped_dnc += 1
             continue
         targets.append(doc)
-    return targets, skipped_dnc
+        if len(targets) >= wanted:
+            break
+    return targets, skipped_dnc, rows_seen
 
 
 async def _run_recall_batch(run_id: str) -> None:
@@ -915,6 +930,34 @@ async def _run_recall_batch(run_id: str) -> None:
         run["finished_at"] = datetime.utcnow()
 
 
+@app.post("/sessions/recall-batch/preview", dependencies=[Depends(require_api_key)])
+async def recall_batch_preview(payload: RecallBatchRequest) -> dict:
+    """How many people this filter would actually ring, before anyone is rung.
+
+    "Call everyone" on a list of 40 promises places 7 calls when those 40 are 7 customers
+    tried several times each. Saying so in the confirmation is the difference between a
+    trusted button and a frightening one.
+    """
+    query = _session_filter_query(
+        status=payload.status, direction=payload.direction, search=payload.search,
+        disposition=payload.disposition, date_from=payload.date_from, date_to=payload.date_to,
+    )
+    calls_in_list = await handler.db.sessions.count_documents(query)
+    targets, skipped_dnc, rows_seen = await _recall_targets(payload)
+    app_settings = await handler.db.get_app_settings()
+    start, end = campaign_service._calling_window(app_settings)
+    return {
+        "customers": len(targets),
+        "calls_in_list": calls_in_list,
+        "skipped_dnc": skipped_dnc,
+        # True when the filter is bigger than one batch may read or dial.
+        "capped": len(targets) >= max(1, min(payload.limit, RECALL_BATCH_MAX))
+        or rows_seen >= RECALL_SCAN_MAX,
+        "within_calling_hours": campaign_service._within_calling_hours(app_settings),
+        "calling_hours": [start, end],
+    }
+
+
 @app.post("/sessions/recall-batch", dependencies=[Depends(require_api_key)])
 async def recall_batch(payload: RecallBatchRequest) -> dict:
     """Ring everyone behind the filter the operator is looking at."""
@@ -926,7 +969,7 @@ async def recall_batch(payload: RecallBatchRequest) -> dict:
             detail=f"calls are only placed between {start}:00 and {end}:00",
         )
 
-    targets, skipped_dnc = await _recall_targets(payload)
+    targets, skipped_dnc, _ = await _recall_targets(payload)
     if not targets:
         detail = "there is nobody to call in this filter"
         if skipped_dnc:
