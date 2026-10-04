@@ -1,7 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { PhoneNumber } from "../components/PhoneNumber";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { OUTCOME_GROUPS, countsForGroups } from "../components/Outcomes";
 import { formatShare, sharesOf } from "../components/shares";
 import { DateRangeFilter } from "../components/DateRangeFilter";
@@ -16,8 +15,6 @@ import {
 import {
   getAnalyticsSummary,
   getHealth,
-  getPromisesDue,
-  recallSession,
   listCampaigns,
   listQueueCalls,
   listSessions,
@@ -118,8 +115,8 @@ export function Dashboard() {
   const { data: queue } = useQuery({ queryKey: ["queue"], queryFn: listQueueCalls });
   const { data: campaigns } = useQuery({ queryKey: ["campaigns"], queryFn: listCampaigns });
 
-  // The period the page counts. Calls, dialer runs and outcomes follow it; the queue and
-  // the promises to chase are live and do not.
+  // The period the page counts. Calls, dialer runs and outcomes follow it; the queue is
+  // live and does not.
   const [searchParams, setSearchParams] = useSearchParams();
   const range = readRange(searchParams);
   const span = resolveRange(range);
@@ -133,33 +130,6 @@ export function Dashboard() {
     queryFn: () => getAnalyticsSummary(span),
     placeholderData: keepPreviousData,
     refetchInterval: 30_000,
-  });
-  const promiseClient = useQueryClient();
-  const [calling, setCalling] = useState<string | null>(null);
-  // Which of the three promise piles is open. A count nobody can open is a number to
-  // look at; the names behind it are what gets worked.
-  const [dueFilter, setDueFilter] = useState<"today" | "tomorrow" | null>(null);
-  const [callNote, setCallNote] = useState<string | null>(null);
-  // Chasing a promise means ringing the person back, so the row that names them is where
-  // the call belongs - not a number to copy into the test-call form.
-  const callAgain = useMutation({
-    mutationFn: recallSession,
-    onSuccess: () => {
-      setCallNote("Calling now — it will show up in Conversations.");
-      promiseClient.invalidateQueries({ queryKey: ["sessions"] });
-    },
-    onError: (err: unknown) => {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data
-        ?.detail;
-      setCallNote(detail || (err as Error).message);
-    },
-    onSettled: () => setCalling(null),
-  });
-
-  const { data: promises } = useQuery({
-    queryKey: ["promisesDue"],
-    queryFn: getPromisesDue,
-    refetchInterval: 60_000,
   });
 
   const activeSessions = sessions?.filter((s) => s.active).length ?? 0;
@@ -193,23 +163,6 @@ export function Dashboard() {
       ...totals,
     };
   }, [campaigns, span.date_from, span.date_to]);
-
-  /**
-   * The promises behind whichever pile is open, or the nearest few when none is.
-   *
-   * The piles are worked out from the dates rather than sent as three lists, because
-   * "today" is the server's today and a browser in another timezone would disagree about
-   * which pile a date belongs in.
-   */
-  const shownPromises = useMemo(() => {
-    const all = promises?.due_soon ?? [];
-    if (!dueFilter || !promises) return all.slice(0, 6);
-    const today = promises.today;
-    const next = new Date(`${today}T00:00:00`);
-    next.setDate(next.getDate() + 1);
-    const tomorrow = next.toISOString().slice(0, 10);
-    return all.filter((p) => (dueFilter === "today" ? p.due === today : p.due === tomorrow));
-  }, [promises, dueFilter]);
 
   // What a collections client actually looks at: how many calls produced a promise to
   // pay, how many were refused, how many never reached anyone - in the chosen period.
@@ -308,8 +261,8 @@ export function Dashboard() {
               </span>
             </div>
             <p className="mt-0.5 text-sm text-slate-500">
-              Calls, dialer runs and outcomes for the period on the right. The queue and the
-              promises to chase are always live.
+              Calls, dialer runs and outcomes for the period on the right. The queue is
+              always live.
             </p>
           </div>
           <DateRangeFilter value={range} onChange={setRange} />
@@ -410,110 +363,6 @@ export function Dashboard() {
           </p>
         )}
       </div>
-
-      {/* Promises to chase. A promise is only worth something if somebody rings on the
-        day, and the date and amount were already sitting in every scored call with
-        nothing reading them back out. */}
-      {promises && promises.counts.today + promises.counts.tomorrow + promises.counts.overdue > 0 && (
-        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900">Promises to chase</h2>
-              <p className="text-xs text-slate-400">
-                ₹{promises.amount_promised.toLocaleString("en-IN")} promised across{" "}
-                {promises.counts.overdue +
-                  promises.counts.today +
-                  promises.counts.tomorrow +
-                  promises.counts.later}{" "}
-                calls
-              </p>
-            </div>
-            <Link
-              to="/sessions?outcome=promise"
-              className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
-            >
-              All promises
-            </Link>
-          </div>
-
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            {([
-              { key: "today" as const, n: promises.counts.today, label: "Due today",
-                hint: "ring them now", cls: "border-emerald-200 bg-emerald-50",
-                on: "ring-2 ring-emerald-400", value: "text-emerald-700" },
-              { key: "tomorrow" as const, n: promises.counts.tomorrow, label: "Due tomorrow",
-                hint: "line up for the morning", cls: "border-amber-200 bg-amber-50",
-                on: "ring-2 ring-amber-400", value: "text-amber-700" },
-            ]).map((b) => (
-              <button
-                key={b.label}
-                onClick={() => setDueFilter(dueFilter === b.key ? null : b.key)}
-                disabled={b.n === 0}
-                className={`rounded-xl border p-4 text-left transition disabled:opacity-50 ${b.cls} ${
-                  dueFilter === b.key ? b.on : "hover:brightness-95"
-                }`}
-              >
-                <div className={`text-2xl font-semibold ${b.value}`}>{b.n}</div>
-                <div className="mt-0.5 text-xs font-medium text-slate-700">{b.label}</div>
-                <div className="text-[11px] text-slate-400">
-                  {dueFilter === b.key ? "showing these — click to clear" : b.hint}
-                </div>
-              </button>
-            ))}
-          </div>
-
-          {callNote && <p className="mt-3 text-xs text-slate-500">{callNote}</p>}
-          {dueFilter && (
-            <p className="mt-3 text-xs text-slate-500">
-              {shownPromises.length} customer{shownPromises.length === 1 ? "" : "s"} in this
-              pile.{" "}
-              <button
-                onClick={() => setDueFilter(null)}
-                className="font-medium text-indigo-600 hover:underline"
-              >
-                Show the nearest few instead
-              </button>
-            </p>
-          )}
-
-          <div className="mt-4 divide-y divide-slate-100">
-            {shownPromises.map((p) => (
-              <div key={p.session_id} className="flex items-center gap-3 py-2.5">
-                <span className="w-24 shrink-0 font-mono text-xs text-slate-700">
-                  <PhoneNumber value={p.phone_number} />
-                </span>
-                <span className="w-20 shrink-0 text-xs text-slate-500">
-                  {new Date(p.due).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
-                </span>
-                <span className="w-16 shrink-0 text-xs font-medium text-slate-700">
-                  {p.amount > 0 ? `₹${p.amount.toLocaleString("en-IN")}` : "—"}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-xs text-slate-500" title={p.summary}>
-                  {p.summary}
-                </span>
-                <button
-                  onClick={() => {
-                    setCallNote(null);
-                    setCalling(p.session_id);
-                    callAgain.mutate(p.session_id);
-                  }}
-                  disabled={calling === p.session_id}
-                  title="Ring this customer again"
-                  className="shrink-0 rounded-lg bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white transition hover:bg-indigo-700 disabled:opacity-40"
-                >
-                  {calling === p.session_id ? "Calling…" : "Call"}
-                </button>
-                <Link
-                  to={`/sessions/${p.session_id}`}
-                  className="shrink-0 rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 transition hover:bg-slate-50"
-                >
-                  Open
-                </Link>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* System health */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
