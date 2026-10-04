@@ -2168,6 +2168,16 @@ async def analytics_summary(
             "promises": {
                 "$sum": {"$cond": [{"$in": ["$disposition_code", ["PTP", "FPTP"]]}, 1, 0]}
             },
+            # The dashboard trend stacks each day by outcome, and these two are the piles
+            # it draws besides promises - the same codes as its outcome tiles.
+            "refused": {
+                "$sum": {"$cond": [{"$in": ["$disposition_code", ["RTP", "NC"]]}, 1, 0]}
+            },
+            "paid": {
+                "$sum": {"$cond": [
+                    {"$in": ["$disposition_code", ["CP", "ALREADY_PAID", "PARTIAL_PAID"]]}, 1, 0
+                ]}
+            },
         }},
         {"$sort": {"_id": 1}},
     ]).to_list(400)
@@ -2186,7 +2196,14 @@ async def analytics_summary(
         "promise_rate": round(promises / scored * 100, 1) if scored else 0.0,
         "by_disposition": [{"code": d["_id"], "count": d["count"]} for d in by_disposition],
         "by_day": [
-            {"date": d["_id"], "calls": d["calls"], "promises": d["promises"]} for d in by_day
+            {
+                "date": d["_id"],
+                "calls": d["calls"],
+                "promises": d["promises"],
+                "refused": d["refused"],
+                "paid": d["paid"],
+            }
+            for d in by_day
         ],
         "by_language": [{"language": d["_id"], "count": d["count"]} for d in by_language],
     }
