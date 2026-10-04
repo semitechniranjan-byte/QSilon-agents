@@ -297,6 +297,10 @@ A typical run: 100 leads ≈ 25 minutes of talk ≈ ₹335, ~73 real conversatio
 - Outcome shares that add to exactly 100% with the denominator stated, languages, calls
   per day, promise rate
 - Conversations table with filters, transcript view and one-click recall
+- **Call everyone in a filtered list** (`POST /sessions/recall-batch`): opens from any
+  outcome tile, rings one call per customer (repeats merged), skips do-not-call numbers,
+  obeys calling hours, holds the same concurrency limit as a dialler run, shows progress
+  and can be stopped. Runs are kept in memory, newest 20.
 
 ---
 

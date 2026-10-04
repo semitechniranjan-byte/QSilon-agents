@@ -663,24 +663,20 @@ async def create_call(payload: CallRequest) -> dict:
     )
 
 
-@app.get("/sessions")
-async def list_sessions(
-    limit: int = 50,
-    skip: int = 0,
+def _session_filter_query(
+    *,
     status: Optional[str] = None,
     direction: Optional[str] = None,
     search: Optional[str] = None,
     disposition: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-) -> dict:
-    """One page of sessions, newest first.
+) -> Dict[str, Any]:
+    """The filter behind the Conversations list.
 
-    This used to stream every session in the collection to the browser, which is fine at
-    a hundred calls and fatal at a hundred thousand: the whole result set is built in
-    memory, serialised, and then rendered as one row per document. Filtering happens in
-    the query rather than in the client so a search does not depend on having downloaded
-    everything first.
+    Shared with the batch recall, so "call all of these" rings exactly the people the
+    operator is looking at rather than a second, differently-worded query that happens to
+    be close.
     """
     # The dashboard counts a period, so the list a tile opens onto has to be the same period
     # or the number on the tile and the rows behind it disagree.
@@ -702,6 +698,32 @@ async def list_sessions(
             {"phone_number": {"$regex": safe}},
             {"session_id": {"$regex": safe}},
         ]
+    return query
+
+
+@app.get("/sessions")
+async def list_sessions(
+    limit: int = 50,
+    skip: int = 0,
+    status: Optional[str] = None,
+    direction: Optional[str] = None,
+    search: Optional[str] = None,
+    disposition: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> dict:
+    """One page of sessions, newest first.
+
+    This used to stream every session in the collection to the browser, which is fine at
+    a hundred calls and fatal at a hundred thousand: the whole result set is built in
+    memory, serialised, and then rendered as one row per document. Filtering happens in
+    the query rather than in the client so a search does not depend on having downloaded
+    everything first.
+    """
+    query = _session_filter_query(
+        status=status, direction=direction, search=search, disposition=disposition,
+        date_from=date_from, date_to=date_to,
+    )
 
     limit = max(1, min(limit, 200))
     total = await handler.db.sessions.count_documents(query)
@@ -764,6 +786,194 @@ async def recall_session(session_id: str) -> dict:
             language=session.get("language"),
         )
     )
+
+
+# ---- Calling a whole outcome back -----------------------------------------------------
+# A collections desk works a pile, not a row: ring every promise that came due, try all the
+# unreachable once more. Doing that one "Call again" at a time was the most repetitive
+# thing on the console. A batch takes the filter the operator is already looking at and
+# works it at the pace the pool allows, under the same do-not-call list, calling hours and
+# concurrency limit every other call obeys.
+RECALL_RUNS_KEPT = 20
+RECALL_BATCH_MAX = 500
+
+# In memory, like the dialler runs: one instance, and a batch is not worth a collection.
+_recall_runs: Dict[str, Dict[str, Any]] = {}
+
+
+class RecallBatchRequest(BaseModel):
+    """The Conversations filter, exactly as the list page holds it."""
+
+    disposition: Optional[str] = None
+    status: Optional[str] = None
+    direction: Optional[str] = None
+    search: Optional[str] = None
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    # A guard rail rather than a feature: nobody means to dial a thousand people by accident.
+    limit: int = 200
+
+
+def _recall_run_view(run: Dict[str, Any]) -> dict:
+    """What the console needs; the target list and the task itself stay here."""
+    return {
+        "run_id": run["run_id"],
+        "total": run["total"],
+        "placed": run["placed"],
+        "failed": run["failed"],
+        "skipped_dnc": run["skipped_dnc"],
+        "status": run["status"],
+        "errors": run["errors"][-5:],
+    }
+
+
+async def _recall_targets(payload: RecallBatchRequest) -> tuple:
+    """The newest call per customer in the filter, minus anyone who must not be dialled."""
+    query = _session_filter_query(
+        status=payload.status, direction=payload.direction, search=payload.search,
+        disposition=payload.disposition, date_from=payload.date_from, date_to=payload.date_to,
+    )
+    fields = {
+        "session_id": 1, "phone_number": 1, "format_values": 1, "dynamic_fields": 1,
+        "use_case": 1, "language": 1, "created_at": 1,
+    }
+    limit = max(1, min(payload.limit, RECALL_BATCH_MAX))
+    cursor = handler.db.sessions.find(query, fields).sort("created_at", -1).limit(limit)
+
+    seen = set()
+    targets: list = []
+    skipped_dnc = 0
+    async for doc in cursor:
+        number = (doc.get("phone_number") or "").strip()
+        if not number or number == "unknown":
+            continue
+        # One customer, one call: a number that was tried four times appears four times in
+        # the list, and the operator means to ring the person, not the attempts.
+        key = handler.db.normalise_number(number)
+        if key in seen:
+            continue
+        seen.add(key)
+        if await handler.db.is_suppressed(number):
+            skipped_dnc += 1
+            continue
+        targets.append(doc)
+    return targets, skipped_dnc
+
+
+async def _run_recall_batch(run_id: str) -> None:
+    run = _recall_runs[run_id]
+    try:
+        for target in run.pop("targets", []):
+            if run["stop"]:
+                run["status"] = "stopped"
+                return
+            app_settings = await handler.db.get_app_settings()
+            if not campaign_service._within_calling_hours(app_settings):
+                start, end = campaign_service._calling_window(app_settings)
+                run["status"] = f"stopped - outside calling hours ({start}:00-{end}:00)"
+                return
+            number = (target.get("phone_number") or "").strip()
+            # The same ceiling the dialler runs under: what the host and the model tier can
+            # actually survive, not how many names are on the list.
+            async with call_registry.global_call_semaphore():
+                if run["stop"]:
+                    run["status"] = "stopped"
+                    return
+                try:
+                    result = await create_outbound_call(
+                        OutboundCallRequest(
+                            to_number=number,
+                            format_values=target.get("format_values") or {},
+                            dynamic_fields=target.get("dynamic_fields") or {},
+                            use_case=target.get("use_case"),
+                            language=target.get("language"),
+                        )
+                    )
+                    run["placed"] += 1
+                except HTTPException as exc:
+                    run["failed"] += 1
+                    run["errors"].append(f"{number}: {exc.detail}")
+                    continue
+                except Exception as exc:
+                    run["failed"] += 1
+                    run["errors"].append(f"{number}: {exc}")
+                    continue
+                # Hold the slot until this call is over. create_outbound_call returns once
+                # the call is placed, not once it ends, so without this the whole pile is
+                # dialled within seconds and every call degrades together.
+                session_id = (result or {}).get("session_id")
+                if session_id:
+                    await campaign_service._wait_for_session_end(handler.db, session_id)
+        run["status"] = "stopped" if run["stop"] else "done"
+    except asyncio.CancelledError:
+        run["status"] = "stopped"
+        raise
+    except Exception as exc:
+        logger.exception("Recall batch %s failed", run_id)
+        run["status"] = f"failed: {exc}"
+    finally:
+        run["finished_at"] = datetime.utcnow()
+
+
+@app.post("/sessions/recall-batch", dependencies=[Depends(require_api_key)])
+async def recall_batch(payload: RecallBatchRequest) -> dict:
+    """Ring everyone behind the filter the operator is looking at."""
+    app_settings = await handler.db.get_app_settings()
+    if not campaign_service._within_calling_hours(app_settings):
+        start, end = campaign_service._calling_window(app_settings)
+        raise HTTPException(
+            status_code=409,
+            detail=f"calls are only placed between {start}:00 and {end}:00",
+        )
+
+    targets, skipped_dnc = await _recall_targets(payload)
+    if not targets:
+        detail = "there is nobody to call in this filter"
+        if skipped_dnc:
+            detail += f" - {skipped_dnc} on the do-not-call list"
+        raise HTTPException(status_code=400, detail=detail)
+
+    run_id = secrets.token_hex(6)
+    run: Dict[str, Any] = {
+        "run_id": run_id,
+        "total": len(targets),
+        "placed": 0,
+        "failed": 0,
+        "skipped_dnc": skipped_dnc,
+        "status": "running",
+        "stop": False,
+        "errors": [],
+        "targets": targets,
+        "started_at": datetime.utcnow(),
+    }
+    _recall_runs[run_id] = run
+    while len(_recall_runs) > RECALL_RUNS_KEPT:
+        _recall_runs.pop(next(iter(_recall_runs)))
+    logger.warning(
+        "RECALL BATCH %s: %s customers (%s skipped as do-not-call), filter=%s",
+        run_id, len(targets), skipped_dnc, payload.disposition or "all",
+    )
+    asyncio.create_task(_run_recall_batch(run_id))
+    return _recall_run_view(run)
+
+
+@app.get("/sessions/recall-batch/{run_id}")
+async def recall_batch_status(run_id: str) -> dict:
+    run = _recall_runs.get(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="no such batch")
+    return _recall_run_view(run)
+
+
+@app.post("/sessions/recall-batch/{run_id}/stop", dependencies=[Depends(require_api_key)])
+async def recall_batch_stop(run_id: str) -> dict:
+    """Stop dialling. A call already connected is left to finish on its own."""
+    run = _recall_runs.get(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="no such batch")
+    run["stop"] = True
+    logger.warning("RECALL BATCH %s: stop asked for", run_id)
+    return _recall_run_view(run)
 
 
 @app.get("/sessions/{session_id}/messages")

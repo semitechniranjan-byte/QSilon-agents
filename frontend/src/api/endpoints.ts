@@ -55,6 +55,35 @@ export const listSessionPage = (params: {
 export const recallSession = (id: string) =>
   api.post<{ session_id?: string }>(`/sessions/${id}/recall`).then((r) => r.data);
 
+/** A batch working its way through everyone behind a Conversations filter. */
+export interface RecallBatch {
+  run_id: string;
+  total: number;
+  placed: number;
+  failed: number;
+  /** Numbers in the filter that are on the do-not-call list. */
+  skipped_dnc: number;
+  status: string;
+  errors: string[];
+}
+
+export type RecallBatchFilters = {
+  disposition?: string;
+  status?: string;
+  direction?: string;
+  search?: string;
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+};
+
+export const startRecallBatch = (filters: RecallBatchFilters) =>
+  api.post<RecallBatch>("/sessions/recall-batch", filters).then((r) => r.data);
+export const getRecallBatch = (runId: string) =>
+  api.get<RecallBatch>(`/sessions/recall-batch/${runId}`).then((r) => r.data);
+export const stopRecallBatch = (runId: string) =>
+  api.post<RecallBatch>(`/sessions/recall-batch/${runId}/stop`).then((r) => r.data);
+
 /** Small recent slice, for dashboard summaries that do not need the whole history. */
 export const listSessions = () =>
   api.get<SessionPage>("/sessions", { params: { limit: 200 } }).then((r) => r.data.sessions);

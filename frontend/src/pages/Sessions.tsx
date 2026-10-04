@@ -3,10 +3,18 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { Link, useSearchParams } from "react-router-dom";
 import { DispositionBadge } from "../components/Disposition";
 import { PhoneNumber } from "../components/PhoneNumber";
-import { IconChevronRight, IconEye, IconSearch } from "../components/Icons";
-import { getDispositions, listSessionPage, recallSession } from "../api/endpoints";
+import { IconChevronRight, IconEye, IconPhone, IconSearch } from "../components/Icons";
+import {
+  getDispositions,
+  getRecallBatch,
+  listSessionPage,
+  recallSession,
+  startRecallBatch,
+  stopRecallBatch,
+} from "../api/endpoints";
 import { groupByKey } from "../components/Outcomes";
 import { describeRange } from "../components/dateRange";
+import { useDialog } from "../components/Dialog";
 import { IconRefresh } from "../components/Icons";
 
 const PAGE_SIZE = 25;
@@ -45,6 +53,18 @@ export function Sessions() {
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
   const [page, setPage] = useState(0);
+
+  // Working the whole pile rather than one row at a time: every promise that came due,
+  // every unreachable number, in one go.
+  const dialog = useDialog();
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const [batchNote, setBatchNote] = useState<string | null>(null);
+  const { data: batch } = useQuery({
+    queryKey: ["recallBatch", batchId],
+    queryFn: () => getRecallBatch(batchId as string),
+    enabled: Boolean(batchId),
+    refetchInterval: (query) => (query.state.data?.status === "running" ? 3000 : false),
+  });
 
   // Typing would otherwise fire one request per keystroke; a short settle makes it one
   // request per pause.
@@ -91,6 +111,57 @@ export function Sessions() {
   const from = total === 0 ? 0 : page * PAGE_SIZE + 1;
   const to = Math.min(total, (page + 1) * PAGE_SIZE);
 
+  // Only ever offered on a filtered list. "Call all" with nothing selected would mean
+  // every customer who has ever been called, which nobody means.
+  const filtered =
+    Boolean(outcome) ||
+    hasPeriod ||
+    Boolean(debounced) ||
+    statusFilter !== "all" ||
+    directionFilter !== "all";
+  const batchRunning = batch?.status === "running";
+  const batchDone = batch ? batch.placed + batch.failed : 0;
+
+  const callEveryone = async () => {
+    const who = outcome ? outcome.label.toLowerCase() : "this list";
+    const ok = await dialog.confirm(`Call everyone in ${who}?`, {
+      body:
+        "One call per customer: a number listed several times is called once. Numbers on " +
+        "the do-not-call list are skipped, calls go out at the same pace as a dialler run, " +
+        "and you can stop it at any point.",
+      okLabel: "Call them",
+    });
+    if (!ok) return;
+    setBatchNote(null);
+    try {
+      const run = await startRecallBatch({
+        disposition: outcome ? outcome.codes.join(",") : undefined,
+        status: statusFilter,
+        direction: directionFilter,
+        search: debounced || undefined,
+        date_from: dateFrom,
+        date_to: dateTo,
+      });
+      setBatchId(run.run_id);
+      setBatchNote(
+        `Calling ${run.total} customer${run.total === 1 ? "" : "s"}` +
+          (run.total < total ? ` (${total} calls in the list, repeats merged)` : "") +
+          (run.skipped_dnc ? `, ${run.skipped_dnc} skipped as do-not-call` : "") +
+          ".",
+      );
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data
+        ?.detail;
+      setBatchNote(detail || (err as Error).message);
+    }
+  };
+
+  const stopEveryone = async () => {
+    if (!batchId) return;
+    await stopRecallBatch(batchId);
+    setBatchNote("Stopping — a call already connected is left to finish.");
+  };
+
   return (
     <div className="space-y-5 pb-4">
       <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -131,6 +202,17 @@ export function Sessions() {
                 Show all calls
               </button>
             )}
+            {filtered && total > 0 && (
+              <button
+                onClick={callEveryone}
+                disabled={batchRunning}
+                title="Ring every customer in this list, one call each"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-indigo-700 disabled:opacity-40"
+              >
+                <IconPhone size={13} />
+                {batchRunning ? "Calling…" : "Call everyone"}
+              </button>
+            )}
             {isFetching && <span className="text-xs text-slate-400">Refreshing…</span>}
           </div>
         </div>
@@ -167,6 +249,37 @@ export function Sessions() {
           </select>
         </div>
         {recallNote && <p className="mt-3 text-xs text-slate-500">{recallNote}</p>}
+        {batchNote && <p className="mt-3 text-xs text-slate-500">{batchNote}</p>}
+        {batch && (
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-indigo-200 bg-indigo-50/60 px-3 py-2 text-xs text-slate-600">
+            <span className="font-medium text-slate-800">
+              {batchRunning ? "Calling the list" : batch.status}
+            </span>
+            <span className="tabular-nums">
+              {batch.placed} of {batch.total} placed
+              {batch.failed > 0 && <span className="text-rose-600"> · {batch.failed} failed</span>}
+            </span>
+            <span className="h-1.5 w-28 overflow-hidden rounded-full bg-white">
+              <span
+                className="block h-full rounded-full bg-indigo-600 transition-all"
+                style={{ width: `${Math.round((batchDone / Math.max(1, batch.total)) * 100)}%` }}
+              />
+            </span>
+            {batchRunning && (
+              <button
+                onClick={stopEveryone}
+                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 font-medium text-slate-700 transition hover:bg-slate-50"
+              >
+                Stop
+              </button>
+            )}
+            {batch.errors.length > 0 && (
+              <span className="min-w-0 flex-1 truncate text-rose-600" title={batch.errors.join(" · ")}>
+                {batch.errors[batch.errors.length - 1]}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
