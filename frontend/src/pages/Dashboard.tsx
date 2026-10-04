@@ -138,7 +138,7 @@ export function Dashboard() {
   const [calling, setCalling] = useState<string | null>(null);
   // Which of the three promise piles is open. A count nobody can open is a number to
   // look at; the names behind it are what gets worked.
-  const [dueFilter, setDueFilter] = useState<"overdue" | "today" | "tomorrow" | null>(null);
+  const [dueFilter, setDueFilter] = useState<"today" | "tomorrow" | null>(null);
   const [callNote, setCallNote] = useState<string | null>(null);
   // Chasing a promise means ringing the person back, so the row that names them is where
   // the call belongs - not a number to copy into the test-call form.
@@ -208,13 +208,7 @@ export function Dashboard() {
     const next = new Date(`${today}T00:00:00`);
     next.setDate(next.getDate() + 1);
     const tomorrow = next.toISOString().slice(0, 10);
-    return all.filter((p) =>
-      dueFilter === "overdue"
-        ? p.due < today
-        : dueFilter === "today"
-          ? p.due === today
-          : p.due === tomorrow,
-    );
+    return all.filter((p) => (dueFilter === "today" ? p.due === today : p.due === tomorrow));
   }, [promises, dueFilter]);
 
   // What a collections client actually looks at: how many calls produced a promise to
@@ -442,11 +436,8 @@ export function Dashboard() {
             </Link>
           </div>
 
-          <div className="mt-4 grid grid-cols-3 gap-3">
+          <div className="mt-4 grid grid-cols-2 gap-3">
             {([
-              { key: "overdue" as const, n: promises.counts.overdue, label: "Overdue",
-                hint: "day has passed", cls: "border-rose-200 bg-rose-50",
-                on: "ring-2 ring-rose-400", value: "text-rose-700" },
               { key: "today" as const, n: promises.counts.today, label: "Due today",
                 hint: "ring them now", cls: "border-emerald-200 bg-emerald-50",
                 on: "ring-2 ring-emerald-400", value: "text-emerald-700" },
