@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 # environment variables are also supported: Render writes "Secret Files" into /etc/secrets,
 # where nothing loads them automatically, so an uploaded .env there would silently do
 # nothing and every credential would fall back to its default.
-#
+#qsilon tensorv
 # Real environment variables still win - override=False - so a value set in the host's
 # dashboard is never replaced by a stale uploaded file.
 load_dotenv()
