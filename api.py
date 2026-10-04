@@ -2178,19 +2178,6 @@ async def analytics_summary(
                     {"$in": ["$disposition_code", ["CP", "ALREADY_PAID", "PARTIAL_PAID"]]}, 1, 0
                 ]}
             },
-            # Scored and unreached per day give the answer-rate sparkline, worked out the
-            # same way as the headline rate: reached calls over scored calls.
-            "scored": {
-                # $ifNull first: a missing field is neither null nor "" to $in.
-                "$sum": {"$cond": [
-                    {"$in": [{"$ifNull": ["$disposition_code", ""]}, [""]]}, 0, 1
-                ]}
-            },
-            "unreached": {
-                "$sum": {"$cond": [
-                    {"$in": ["$disposition_code", ["NR", "ICR", "RNR", "LM"]]}, 1, 0
-                ]}
-            },
         }},
         {"$sort": {"_id": 1}},
     ]).to_list(400)
@@ -2215,8 +2202,6 @@ async def analytics_summary(
                 "promises": d["promises"],
                 "refused": d["refused"],
                 "paid": d["paid"],
-                "scored": d["scored"],
-                "unreached": d["unreached"],
             }
             for d in by_day
         ],

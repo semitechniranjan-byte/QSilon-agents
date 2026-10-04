@@ -384,15 +384,7 @@ export interface AnalyticsSummary {
   promises: number;
   promise_rate: number;
   by_disposition: { code: string; count: number }[];
-  by_day: {
-    date: string;
-    calls: number;
-    promises: number;
-    refused?: number;
-    paid?: number;
-    scored?: number;
-    unreached?: number;
-  }[];
+  by_day: { date: string; calls: number; promises: number; refused?: number; paid?: number }[];
   by_language: { language: string; count: number }[];
 }
 
