@@ -1298,6 +1298,7 @@ function DatasheetsSection({ templates }: { templates: DatasheetTemplate[] }) {
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [datasheetTemplateId, setDatasheetTemplateId] = useState("");
+  const [uploadNote, setUploadNote] = useState<string | null>(null);
 
   const datasheetTemplateName = (id: string) => templates.find((t) => t._id === id)?.name || id;
 
@@ -1305,12 +1306,26 @@ function DatasheetsSection({ templates }: { templates: DatasheetTemplate[] }) {
 
   const uploadMutation = useMutation({
     mutationFn: () => uploadDatasheet(name, datasheetTemplateId, file as File),
-    onSuccess: () => {
+    onSuccess: (result) => {
       setName("");
       setFile(null);
       setError(null);
       queryClient.invalidateQueries({ queryKey: ["datasheets"] });
+      queryClient.invalidateQueries({ queryKey: ["datasheetTemplates"] });
       setIsUploadOpen(false);
+      // Say what was decided on their behalf, and warn about anything the script will
+      // try to say that this file cannot fill.
+      const note = [
+        result.format_created
+          ? `Made a format from this file: ${result.format_name}.`
+          : `Used the ${result.format_name} format.`,
+        result.placeholders_missing.length > 0
+          ? `The script also says ${result.placeholders_missing.join(", ")}, which this file does not carry.`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      setUploadNote(note);
     },
     onError: (err: unknown) => {
       const detail =
@@ -1331,7 +1346,7 @@ function DatasheetsSection({ templates }: { templates: DatasheetTemplate[] }) {
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !datasheetTemplateId || !file) return;
+    if (!name.trim() || !file) return;
     setError(null);
     uploadMutation.mutate();
   };
@@ -1421,13 +1436,16 @@ function DatasheetsSection({ templates }: { templates: DatasheetTemplate[] }) {
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <label className="block text-xs font-medium text-slate-600">
-                  Template
+                  Format
                   <select
                     value={datasheetTemplateId}
                     onChange={(e) => setDatasheetTemplateId(e.target.value)}
                     className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                   >
-                    <option value="">Select a template...</option>
+                    {/* The default. Everything a format needs is already written down -
+                        the columns in the file's header, the placeholders in the script -
+                        so it is worked out rather than clicked together. */}
+                    <option value="">Work it out from the file</option>
                     {templates.map((t) => (
                       <option key={t._id} value={t._id}>
                         {t.name}
@@ -1497,13 +1515,25 @@ function DatasheetsSection({ templates }: { templates: DatasheetTemplate[] }) {
 
               <button
                 type="submit"
-                disabled={uploadMutation.isPending || !name.trim() || !datasheetTemplateId || !file}
+                disabled={uploadMutation.isPending || !name.trim() || !file}
                 className="w-full rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
               >
                 {uploadMutation.isPending ? "Uploading..." : "Upload"}
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {uploadNote && (
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-indigo-200 bg-indigo-50/60 px-4 py-2 text-xs text-slate-700">
+          <span>{uploadNote}</span>
+          <button
+            onClick={() => setUploadNote(null)}
+            className="shrink-0 text-slate-400 transition hover:text-slate-600"
+          >
+            <IconX size={13} />
+          </button>
         </div>
       )}
 

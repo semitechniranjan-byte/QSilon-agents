@@ -474,13 +474,28 @@ export const updateTemplate = (id: string, payload: Partial<TemplatePayload>) =>
 export const deleteTemplate = (id: string) =>
   api.delete(`/templates/${id}`).then((r) => r.data);
 
+export interface UploadedDatasheet {
+  datasheet_id: string;
+  row_count: number;
+  columns: string[];
+  datasheet_template_id: string;
+  format_name?: string;
+  /** True when no existing format fitted and one was made from the file and the script. */
+  format_created: boolean;
+  /** Placeholders the script will speak that this file cannot fill. */
+  placeholders_missing: string[];
+}
+
+/**
+ * Upload a list. Leave the format out and the server finds one that fits or makes it.
+ */
 export const uploadDatasheet = (name: string, datasheetTemplateId: string, file: File) => {
   const form = new FormData();
   form.append("name", name);
-  form.append("datasheet_template_id", datasheetTemplateId);
+  if (datasheetTemplateId) form.append("datasheet_template_id", datasheetTemplateId);
   form.append("file", file);
   return api
-    .post<{ datasheet_id: string; row_count: number; columns: string[] }>("/datasheets/upload", form, {
+    .post<UploadedDatasheet>("/datasheets/upload", form, {
       headers: { "Content-Type": "multipart/form-data" },
     })
     .then((r) => r.data);

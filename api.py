@@ -1616,6 +1616,24 @@ async def plan_datasheet_template(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    plan = await _plan_format(
+        columns, len(rows), use_case=use_case, language=language, template_id=template_id,
+        sample=sample, min_coverage=min_coverage,
+    )
+    return {"filename": file.filename, **plan}
+
+
+async def _plan_format(
+    columns: list,
+    row_count: int,
+    *,
+    use_case: Optional[str] = None,
+    language: Optional[str] = None,
+    template_id: Optional[str] = None,
+    sample: int = 200,
+    min_coverage: int = 70,
+) -> dict:
+    """The format this file needs, worked out from the file and the script together."""
     by_normal = {_normalise_column(c): c for c in columns if str(c).strip()}
 
     # What the script will try to say.
@@ -1670,8 +1688,7 @@ async def plan_datasheet_template(
         ).get("system_prompt") or ""
 
     return {
-        "filename": file.filename,
-        "rows": len(rows),
+        "rows": row_count,
         "script_configured": bool(resolved_script.strip()),
         "required_columns": [_normalise_column(c) for c in columns if str(c).strip()],
         "phone_column": phone_column,
@@ -2697,32 +2714,95 @@ async def list_supported_languages() -> dict:
     }
 
 
+#: Result columns worth keeping per attempt when a format is made automatically. Only the
+#: ones the calls actually fill in are used; the rest are dropped.
+AUTO_ATTEMPT_COLUMNS = (
+    "DIALED_DATETIME", "CUSTOMER_START_TIME", "CUSTOMER_END_TIME",
+    "BOT/IVR_STATUS", "DISPOSITION", "DURATION", "EXECUTION_ID",
+)
+
+
+async def _matching_format(columns: list) -> Optional[dict]:
+    """An existing format this file already satisfies - the most specific one that fits."""
+    best, best_size = None, -1
+    for candidate in await handler.db.list_datasheet_templates():
+        required = candidate.get("required_columns") or []
+        try:
+            validate_columns(columns, required)
+        except ValueError:
+            continue
+        if len(required) > best_size:
+            best, best_size = candidate, len(required)
+    return best
+
+
 @app.post("/datasheets/upload", dependencies=[Depends(require_api_key)])
 async def upload_datasheet(
-    datasheet_template_id: str = Form(...),
     name: str = Form(...),
     file: UploadFile = File(...),
+    datasheet_template_id: Optional[str] = Form(None),
+    use_case: Optional[str] = Form(None),
+    language: Optional[str] = Form(None),
 ) -> dict:
-    datasheet_template = await handler.db.get_datasheet_template(datasheet_template_id)
-    if not datasheet_template:
-        raise HTTPException(status_code=404, detail="datasheet template not found")
+    """Take a file and make it callable.
 
+    Choosing a format by hand, then mapping twenty columns into it, was the longest
+    stretch of clicking in the product - and every answer was already written down: the
+    columns are in the file's header, the placeholders are in the script, and the result
+    fields are what real calls produce. Leave the format out and one is found or made.
+    """
     content = await file.read()
     try:
         columns, rows = parse_datasheet_file(file.filename or "", content)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    try:
-        validate_columns(columns, datasheet_template.get("required_columns") or [])
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     if not rows:
         raise HTTPException(status_code=400, detail="Uploaded file has no data rows.")
 
+    created_format = False
+    missing_placeholders: list = []
+    if datasheet_template_id:
+        datasheet_template = await handler.db.get_datasheet_template(datasheet_template_id)
+        if not datasheet_template:
+            raise HTTPException(status_code=404, detail="datasheet template not found")
+        try:
+            validate_columns(columns, datasheet_template.get("required_columns") or [])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    else:
+        datasheet_template = await _matching_format(columns)
+        if not datasheet_template:
+            plan = await _plan_format(
+                columns, len(rows), use_case=use_case, language=language
+            )
+            mapping = plan["update_columns_mapping"]
+            new_id = await handler.db.create_datasheet_template({
+                "name": f"{name} format",
+                "required_columns": plan["required_columns"],
+                "required_columns_mapping": {},
+                "update_columns_mapping": mapping,
+                # Only the result columns this deployment actually fills in are kept per
+                # attempt; promising a column the calls never write is worse than not
+                # offering it.
+                "attempt_columns": [c for c in AUTO_ATTEMPT_COLUMNS if c in mapping],
+            })
+            datasheet_template = await handler.db.get_datasheet_template(new_id)
+            created_format = True
+            missing_placeholders = plan.get("placeholders_missing") or []
+        datasheet_template_id = str(datasheet_template.get("_id") or datasheet_template.get("id"))
+
     datasheet_id = await handler.db.create_datasheet(name, datasheet_template_id, columns, rows)
-    return {"datasheet_id": datasheet_id, "row_count": len(rows), "columns": columns}
+    return {
+        "datasheet_id": datasheet_id,
+        "row_count": len(rows),
+        "columns": columns,
+        "datasheet_template_id": datasheet_template_id,
+        "format_name": (datasheet_template or {}).get("name"),
+        "format_created": created_format,
+        # Placeholders the script will speak but this file cannot fill. Better seen now
+        # than heard by a customer as a gap.
+        "placeholders_missing": missing_placeholders,
+    }
 
 
 @app.get("/datasheets")
