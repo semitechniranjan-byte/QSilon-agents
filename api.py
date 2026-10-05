@@ -2066,6 +2066,62 @@ async def report_calls_csv(
     )
 
 
+#: DISPOSITION_2_ATTEMPT -> ("DISPOSITION", 2). The suffix is how a result sheet keeps
+#: every attempt instead of only the last one.
+_ATTEMPT_COLUMN = re.compile(r"^(?P<column>.+)_(?P<attempt>\d+)_ATTEMPT$")
+
+
+@app.get("/datasheets/{datasheet_id}/export.csv")
+async def export_datasheet_csv(datasheet_id: str) -> Response:
+    """The call list exactly as it was uploaded, with what the calls produced beside it.
+
+    This is the file a client sends back into their own system: one row per customer,
+    every column they gave us, then the result columns the format maps, then each attempt
+    under its own numbered columns. Input and output in one sheet, which is what a
+    collections desk reconciles against - the per-call report cannot be joined back to
+    their list without one.
+    """
+    sheet = await handler.db.get_datasheet(datasheet_id)
+    if not sheet:
+        raise HTTPException(status_code=404, detail="call list not found")
+
+    rows = sheet.get("rows") or []
+    header = [str(c) for c in (sheet.get("columns") or []) if str(c or "").strip()]
+    seen = set(header)
+    results: list = []
+    attempts: Dict[int, list] = {}
+    for row in rows:
+        for key in (row.get("data") or {}):
+            name = str(key)
+            if name in seen:
+                continue
+            seen.add(name)
+            match = _ATTEMPT_COLUMN.match(name)
+            if match:
+                attempts.setdefault(int(match.group("attempt")), []).append(name)
+            else:
+                results.append(name)
+    # Uploaded columns, then the latest result of each call, then attempt by attempt.
+    header += results + [name for n in sorted(attempts) for name in attempts[n]]
+
+    buffer = _io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(header)
+    for row in rows:
+        data = row.get("data") or {}
+        writer.writerow([_clean(data.get(column, "")) for column in header])
+
+    name = re.sub(r"[^A-Za-z0-9_-]+", "-", str(sheet.get("name") or "call-list")).strip("-")
+    filename = f"{name or 'call-list'}-results-{datetime.now().strftime('%Y%m%d-%H%M')}.csv"
+    return Response(
+        # Excel reads UTF-8 correctly only with the BOM, and these lists carry Devanagari
+        # names more often than not.
+        content="﻿" + buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="' + filename + '"'},
+    )
+
+
 def _parse_promise_date(raw: Any) -> Optional[date]:
     """A promise date as the analysis writes it, or None if it wrote nothing usable."""
     text = str(raw or "").strip()

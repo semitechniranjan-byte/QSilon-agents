@@ -404,6 +404,31 @@ export const getAnalyticsSummary = (params: { date_from?: string; date_to?: stri
   api.get<AnalyticsSummary>("/analytics/summary", { params }).then((r) => r.data);
 
 /**
+ * The call list with its results: what was uploaded, what each attempt produced.
+ *
+ * Built on the server. Doing it in the browser meant pulling every row of a 20,000-row
+ * sheet over the wire to write a file out of them, with the columns in whatever order a
+ * Set happened to produce and no BOM for Excel.
+ */
+export async function downloadDatasheetCsv(datasheetId: string): Promise<number> {
+  const response = await api.get(`/datasheets/${datasheetId}/export.csv`, {
+    responseType: "blob",
+  });
+  const blob = response.data as Blob;
+  const disposition = String(response.headers["content-disposition"] || "");
+  const named = /filename="([^"]+)"/.exec(disposition);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = named?.[1] || "call-list-results.csv";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  return blob.size;
+}
+
+/**
  * Pull the report as a blob and hand it to the browser.
  *
  * A plain link would skip the API key the interceptor adds, and would give no way to

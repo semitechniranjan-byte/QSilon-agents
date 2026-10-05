@@ -6,7 +6,7 @@ import {
   createDatasheetTemplate,
   deleteDatasheet,
   deleteDatasheetTemplate,
-  getDatasheet,
+  downloadDatasheetCsv,
   adoptMappingKeys,
   discoverMappingKeys,
   getMappingKeys,
@@ -1351,26 +1351,20 @@ function DatasheetsSection({ templates }: { templates: DatasheetTemplate[] }) {
     renameMutation.mutate({ id: ds._id, name: next });
   };
 
+  // The file a client sends back into their own system: their columns as uploaded, then
+  // the result of each call, then every attempt under its own numbered columns. Built on
+  // the server - see downloadDatasheetCsv.
   const handleDownload = async (ds: Datasheet) => {
-    const full = await getDatasheet(ds._id);
-    const rows = full.rows ?? [];
-    if (rows.length === 0) return;
-    const cols = Array.from(new Set(rows.flatMap((r) => Object.keys(r.data ?? {}))));
-    const header = [...cols, "STATUS", "DISPOSITION"];
-    const lines = [header.join(",")];
-    for (const row of rows) {
-      const vals = cols.map((c) => JSON.stringify(String(row.data?.[c] ?? "")));
-      vals.push(JSON.stringify(row.status));
-      vals.push(JSON.stringify(row.disposition_code ?? ""));
-      lines.push(vals.join(","));
+    try {
+      await downloadDatasheetCsv(ds._id);
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data
+        ?.detail;
+      await dialog.confirm("Could not build the file", {
+        body: detail || (err as Error).message,
+        okLabel: "Close",
+      });
     }
-    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${ds.name}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
   const [isDragging, setIsDragging] = useState(false);
