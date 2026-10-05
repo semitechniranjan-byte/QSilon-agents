@@ -499,6 +499,12 @@ class CampaignRequest(BaseModel):
     # Which rows of the list this run should dial: {"match": "all"|"any", "rules": [...]}.
     # The rules are the client's own - see row_filter. No filter means the whole list.
     row_filter: Optional[Dict[str, Any]] = None
+    # This run's own calling rules. Anything left out falls back to Settings, so a run that
+    # says nothing behaves exactly as runs did before.
+    calling_start_hour: Optional[int] = None
+    calling_end_hour: Optional[int] = None
+    max_attempts: Optional[int] = None
+    retry_gap_hours: Optional[int] = None
 
 
 class TranscribeRequest(BaseModel):
@@ -2861,8 +2867,15 @@ async def create_campaign(payload: CampaignRequest) -> dict:
         agent_id=payload.agent_id,
         agent_ids=payload.agent_ids,
     )
-    if payload.row_filter and campaign_id:
-        await handler.db.update_campaign(campaign_id, row_filter=payload.row_filter)
+    overrides: Dict[str, Any] = {}
+    if payload.row_filter:
+        overrides["row_filter"] = payload.row_filter
+    for key in ("calling_start_hour", "calling_end_hour", "max_attempts", "retry_gap_hours"):
+        value = getattr(payload, key)
+        if value is not None:
+            overrides[key] = value
+    if overrides and campaign_id:
+        await handler.db.update_campaign(campaign_id, **overrides)
     # Booking it at creation saves a second call, and the sweep starts it when the time
     # comes without anybody being at a screen.
     if payload.scheduled_at and campaign_id:

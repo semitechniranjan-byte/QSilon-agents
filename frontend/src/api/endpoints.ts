@@ -600,6 +600,11 @@ export const createCampaign = (payload: {
   mode: string;
   /** Which rows of the list to dial. Omitted means all of them. */
   row_filter?: RowFilterSpec;
+  /** This run's own calling rules; anything omitted falls back to Settings. */
+  calling_start_hour?: number;
+  calling_end_hour?: number;
+  max_attempts?: number;
+  retry_gap_hours?: number;
   /** ISO timestamp to start at. Omitted means start as soon as it is launched. */
   scheduled_at?: string;
   datasheet_id: string;

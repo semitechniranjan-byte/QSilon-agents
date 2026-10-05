@@ -165,7 +165,9 @@ def _next_window_open(app_settings: Optional[Dict[str, Any]] = None) -> datetime
     return datetime.utcnow() + (opens - now)
 
 
-async def _schedule_retry(db, datasheet_id: str, row_index: int, row: Optional[dict]) -> None:
+async def _schedule_retry(
+    db, datasheet_id: str, row_index: int, row: Optional[dict], conf: Optional[dict] = None
+) -> None:
     """Book another attempt for a row nobody answered, if it has attempts left.
 
     Thirty percent of a list ends this way and every one of them used to stop there - the
@@ -177,7 +179,7 @@ async def _schedule_retry(db, datasheet_id: str, row_index: int, row: Optional[d
     code = str(row.get("disposition_code") or "").upper()
     if code and code not in RETRYABLE_CODES:
         return
-    conf = await db.get_app_settings()
+    conf = conf if conf is not None else await db.get_app_settings()
     max_attempts, gap_hours = _retry_policy(conf)
     attempts = int(row.get("attempt_count") or 1)
     if attempts >= max_attempts:
@@ -325,6 +327,7 @@ async def _run_one_row(
     execution_id: Optional[str],
     update_columns_mapping: dict,
     attempt_columns: Optional[list],
+    run_conf: Optional[dict],
     max_call_seconds: int,
     semaphore: asyncio.Semaphore,
     llm_provider: Optional[str] = None,
@@ -387,7 +390,10 @@ async def _run_one_row(
             # Nobody wants a collections call at four in the morning, and in India nobody
             # is allowed to place one. A row caught outside the window is booked for the
             # next opening rather than dialled or dropped.
-            conf = await db.get_app_settings()
+            # A run may carry its own hours and retry policy - a morning reminder list and
+            # an evening follow-up are the same product with different rules - and falls
+            # back to the deployment's settings for anything it does not set.
+            conf = run_conf if run_conf is not None else await db.get_app_settings()
             if not _within_calling_hours(conf):
                 start, end = _calling_window(conf)
                 logger.warning(
@@ -529,7 +535,7 @@ async def _run_one_row(
                 refreshed_row = await db.get_datasheet_row(datasheet_id, row_index)
                 final_status = (refreshed_row or {}).get("status") or "failed"
                 await db.shift_campaign_stat(campaign_id, "calling", final_status)
-                await _schedule_retry(db, datasheet_id, row_index, refreshed_row)
+                await _schedule_retry(db, datasheet_id, row_index, refreshed_row, run_conf)
             finally:
                 if session_id:
                     await call_registry.unregister_call(session_id)
@@ -600,6 +606,18 @@ async def run_campaign(
 
         # Telephony/from-number now live in global settings rather than per template.
         app_settings = await db.get_app_settings()
+        # What this run was told, over what the deployment is set to. A morning reminder
+        # list and an evening follow-up are the same product with different hours.
+        run_conf = {
+            **app_settings,
+            **{
+                key: campaign[key]
+                for key in (
+                    "calling_start_hour", "calling_end_hour", "max_attempts", "retry_gap_hours",
+                )
+                if campaign.get(key) is not None
+            },
+        }
         provider = app_settings.get("telephony_provider") or template.get("telephony_provider") or "twilio"
         from_number = app_settings.get("from_number") or template.get("from_number") or None
 
@@ -680,6 +698,7 @@ async def run_campaign(
                     execution_id=execution_id,
                     update_columns_mapping=update_columns_mapping,
                     attempt_columns=attempt_columns,
+                    run_conf=run_conf,
                     llm_provider=app_settings.get("llm_provider"),
                     llm_model=app_settings.get("llm_model"),
                     max_call_seconds=int(
