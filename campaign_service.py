@@ -8,16 +8,20 @@ try:
     from .template_service import (
         apply_format_value_transforms,
         apply_update_columns_mapping,
+        attempt_history_updates,
         resolve_template_config,
     )
+    from .datasheet_service import find_column, find_phone_column
     from .call_handler import CallHandler
     from . import call_registry
 except ImportError:  # pragma: no cover
     from template_service import (
         apply_format_value_transforms,
         apply_update_columns_mapping,
+        attempt_history_updates,
         resolve_template_config,
     )
+    from datasheet_service import find_column, find_phone_column
     from call_handler import CallHandler
     import call_registry
 
@@ -318,6 +322,7 @@ async def _run_one_row(
     from_number: Optional[str],
     execution_id: Optional[str],
     update_columns_mapping: dict,
+    attempt_columns: Optional[list],
     max_call_seconds: int,
     semaphore: asyncio.Semaphore,
     llm_provider: Optional[str] = None,
@@ -329,6 +334,14 @@ async def _run_one_row(
     row_index = row["row_index"]
     row_data: Dict[str, Any] = row.get("data", {}) or {}
     phone = str(row_data.get(phone_column, "")).strip() if phone_column else ""
+    if not phone:
+        # The header is whatever the client's system exported: MOBILE_NO, Mobile No,
+        # mobile-no. The column is matched on its letters rather than its spelling, and
+        # failing that, by what it is called.
+        columns = list(row_data.keys())
+        actual = find_column(columns, phone_column or "") or find_phone_column(columns)
+        if actual:
+            phone = str(row_data.get(actual) or "").strip()
 
     if not phone:
         await db.update_datasheet_row(
@@ -487,11 +500,29 @@ async def _run_one_row(
                     handler, datasheet_id, row_index, session_id if telephony_ok else None, cfg["analysis_prompt"]
                 )
 
+                # Count the attempt the moment it finishes. The counter was never
+                # incremented: a row nobody answered was booked for another try for ever,
+                # since "attempts >= max_attempts" could not become true. It is also what
+                # the client's sheet reports and what a filter like "fewer than 3 tries"
+                # reads.
+                row_before = await db.get_datasheet_row(datasheet_id, row_index)
+                attempt_no = int((row_before or {}).get("attempt_count") or 0) + 1
+                writes: Dict[str, Any] = {
+                    "attempt_count": attempt_no,
+                    "last_attempt_at": datetime.utcnow(),
+                }
                 if update_columns_mapping:
                     session_doc = await db.get_session(session_id) if session_id else None
                     mapped_updates = apply_update_columns_mapping(session_doc, update_columns_mapping)
                     if mapped_updates:
-                        await db.update_datasheet_row(datasheet_id, row_index, **mapped_updates)
+                        writes.update(mapped_updates)
+                        # ...and the same values under this attempt's own number, so the
+                        # fifth call does not erase what the first one found.
+                        writes.update(
+                            attempt_history_updates(mapped_updates, attempt_columns, attempt_no)
+                        )
+                        writes["data.ATTEMPT_COUNT"] = attempt_no
+                await db.update_datasheet_row(datasheet_id, row_index, **writes)
 
                 refreshed_row = await db.get_datasheet_row(datasheet_id, row_index)
                 final_status = (refreshed_row or {}).get("status") or "failed"
@@ -523,6 +554,8 @@ async def run_campaign(
 
         datasheet_template = await db.get_datasheet_template(datasheet.get("datasheet_template_id", ""))
         update_columns_mapping = (datasheet_template or {}).get("update_columns_mapping") or {}
+        # Which of those columns are also kept per attempt, as DISPOSITION_1_ATTEMPT and so on.
+        attempt_columns = (datasheet_template or {}).get("attempt_columns") or []
 
         execution_id = campaign.get("execution_id")
         if not execution_id:
@@ -633,6 +666,7 @@ async def run_campaign(
                     from_number=from_number,
                     execution_id=execution_id,
                     update_columns_mapping=update_columns_mapping,
+                    attempt_columns=attempt_columns,
                     llm_provider=app_settings.get("llm_provider"),
                     llm_model=app_settings.get("llm_model"),
                     max_call_seconds=int(

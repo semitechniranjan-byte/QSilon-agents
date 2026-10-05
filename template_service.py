@@ -207,3 +207,26 @@ def apply_update_columns_mapping(session_doc: Optional[dict], mapping: Dict[str,
         f"data.{output_col}": resolve_path_with_fallbacks(session_doc, path_spec)
         for output_col, path_spec in (mapping or {}).items()
     }
+
+
+def attempt_history_updates(
+    mapped_updates: Dict[str, Any],
+    attempt_columns: Optional[List[str]],
+    attempt_no: int,
+) -> Dict[str, Any]:
+    """This attempt's results kept under its own number, beside the latest-value columns.
+
+    The sheet a collections desk sends back carries DISPOSITION_1_ATTEMPT,
+    DURATION_2_ATTEMPT and so on, because the fifth call must not erase what the first one
+    found. Only the columns the format names as attempt columns are kept this way - the
+    rest simply hold the most recent value.
+    """
+    if not attempt_columns or attempt_no < 1:
+        return {}
+    wanted = {str(column).strip() for column in attempt_columns if str(column or "").strip()}
+    updates: Dict[str, Any] = {}
+    for key, value in (mapped_updates or {}).items():
+        column = key[len("data."):] if key.startswith("data.") else key
+        if column in wanted:
+            updates[f"data.{column}_{attempt_no}_ATTEMPT"] = value
+    return updates
