@@ -297,6 +297,22 @@ A typical run: 100 leads ≈ 25 minutes of talk ≈ ₹335, ~73 real conversatio
 - Outcome shares that add to exactly 100% with the denominator stated, languages, calls
   per day, promise rate
 - Conversations table with filters, transcript view and one-click recall
+**Lists, attempts and results** (5 Oct)
+- Every attempt is counted and kept: the row's `attempt_count` increments, and each
+  attempt's results are written under their own number (`DISPOSITION_1_ATTEMPT`). Before
+  this the counter never moved, so unanswered rows retried for ever.
+- `GET /datasheets/{id}/export.csv` - the client's own columns, then the latest result,
+  then attempt by attempt. This is the file they reconcile against.
+- **Row filters** (`row_filter.py`): a run dials the rows the client's own rules select -
+  field, operator, value. `GET /datasheets/{id}/fields` offers the fields and the values
+  found in that list; `POST /datasheets/{id}/filter-count` answers "4,312 of 20,000" before
+  anyone is called. Nothing in the engine knows what PTP or NR mean.
+- **Outcomes are not configured any more**: `GET /dispositions` reads the codes the calls
+  produced and the labels the scripts define. The Settings editor is gone.
+- **Formats build themselves**: uploading without choosing one finds a format the file
+  satisfies or makes it from the file plus the script.
+- Headers match on letters and digits, so MOBILE_NO / Mobile No / mobile-no are one column.
+
 - **Call everyone in a filtered list** (`POST /sessions/recall-batch`): opens from any
   outcome tile, rings one call per customer (repeats merged), skips do-not-call numbers,
   obeys calling hours, holds the same concurrency limit as a dialler run, shows progress
