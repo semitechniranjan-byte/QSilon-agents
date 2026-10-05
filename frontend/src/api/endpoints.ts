@@ -546,9 +546,45 @@ export const setMappingKeys = (categories: MappingKeyCategories) =>
     .put<{ categories: MappingKeyCategories }>("/mapping-keys", { categories })
     .then((r) => r.data.categories);
 
+/** One rule of a run's filter: a field of the list, an operator, and a value. */
+export interface FilterRule {
+  field: string;
+  op: string;
+  value?: string | number | (string | number)[];
+}
+
+export interface RowFilterSpec {
+  match: "all" | "any";
+  rules: FilterRule[];
+}
+
+/** A field this list can be filtered on - the client's own columns, and what calls wrote. */
+export interface DatasheetField {
+  name: string;
+  /** "list" = a column they uploaded, "call" = something the calls produced. */
+  source: "list" | "call";
+  kind: "text" | "number" | "date";
+  filled: number;
+  empty: number;
+  /** Offered as a pick-list only when the column is a vocabulary rather than free text. */
+  values: { value: string; count: number }[];
+}
+
+export const getDatasheetFields = (datasheetId: string) =>
+  api
+    .get<{ rows: number; fields: DatasheetField[] }>(`/datasheets/${datasheetId}/fields`)
+    .then((r) => r.data);
+
+export const countFilteredRows = (datasheetId: string, spec: RowFilterSpec) =>
+  api
+    .post<{ total: number; matching: number }>(`/datasheets/${datasheetId}/filter-count`, spec)
+    .then((r) => r.data);
+
 export const createCampaign = (payload: {
   name: string;
   mode: string;
+  /** Which rows of the list to dial. Omitted means all of them. */
+  row_filter?: RowFilterSpec;
   /** ISO timestamp to start at. Omitted means start as soon as it is launched. */
   scheduled_at?: string;
   datasheet_id: string;

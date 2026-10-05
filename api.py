@@ -7,6 +7,7 @@ import os
 import csv
 import io as _io
 import re
+from collections import Counter
 from datetime import date, datetime, timedelta
 from bson import ObjectId
 import secrets
@@ -29,6 +30,7 @@ try:
     from .template_service import SUPPORTED_LANGUAGES, resolve_template_config, apply_format_value_transforms
     from .providers import describe_providers
     from . import call_registry
+    from . import row_filter
 except ImportError:  # pragma: no cover
     from analyze_sessions import router as analyze_sessions_router, init_analyze_sessions
     from call_handler import CallHandler, LLM_HEDGE_AFTER_SECONDS
@@ -39,6 +41,7 @@ except ImportError:  # pragma: no cover
     from template_service import SUPPORTED_LANGUAGES, resolve_template_config, apply_format_value_transforms
     from providers import describe_providers
     import call_registry
+    import row_filter
 
 app = FastAPI(title="Minimal Voice Clone API")
 # When the built frontend is served by this same app the origin matches and CORS is moot,
@@ -493,6 +496,9 @@ class CampaignRequest(BaseModel):
     # When to start, as an ISO timestamp. A list uploaded at night should not have to wait
     # for somebody to be at a screen at ten the next morning.
     scheduled_at: Optional[str] = None
+    # Which rows of the list this run should dial: {"match": "all"|"any", "rules": [...]}.
+    # The rules are the client's own - see row_filter. No filter means the whole list.
+    row_filter: Optional[Dict[str, Any]] = None
 
 
 class TranscribeRequest(BaseModel):
@@ -2071,6 +2077,99 @@ async def report_calls_csv(
 _ATTEMPT_COLUMN = re.compile(r"^(?P<column>.+)_(?P<attempt>\d+)_ATTEMPT$")
 
 
+class RowFilterRequest(BaseModel):
+    """A filter as the console builds it. Rules are {field, op, value}."""
+
+    rules: list = []
+    match: str = "all"
+
+
+def _field_kind(values: list) -> str:
+    """Number, date or text - decided by what the column actually holds."""
+    filled = [v for v in values if str(v if v is not None else "").strip()]
+    if not filled:
+        return "text"
+    if all(isinstance(v, datetime) for v in filled):
+        return "date"
+    numeric = sum(1 for v in filled if row_filter._as_number(v) is not None)
+    return "number" if numeric >= max(1, int(len(filled) * 0.8)) else "text"
+
+
+@app.get("/datasheets/{datasheet_id}/fields")
+async def datasheet_fields(datasheet_id: str, values_limit: int = 40) -> dict:
+    """Everything this list can be filtered on, read out of the list itself.
+
+    The console offers no fixed vocabulary: the fields are the client's own columns plus
+    whatever the calls wrote back, and the values offered for each are the values that are
+    actually in there. A collections desk sees PTP and NR because its calls produced them;
+    a clinic sees its own outcomes without anything being configured.
+    """
+    sheet = await handler.db.get_datasheet(datasheet_id)
+    if not sheet:
+        raise HTTPException(status_code=404, detail="call list not found")
+
+    rows = sheet.get("rows") or []
+    uploaded = [str(c) for c in (sheet.get("columns") or []) if str(c or "").strip()]
+    uploaded_keys = {_normalise_column(c) for c in uploaded}
+
+    order: list = list(uploaded)
+    samples: Dict[str, list] = {name: [] for name in uploaded}
+    for row in rows:
+        for key, value in (row.get("data") or {}).items():
+            name = str(key)
+            if name not in samples:
+                samples[name] = []
+                order.append(name)
+            samples[name].append(value)
+        for name, attribute in row_filter.ROW_FIELDS.items():
+            if _normalise_column(name) in uploaded_keys:
+                continue  # the client's own column of that name wins
+            if name not in samples:
+                samples[name] = []
+                order.append(name)
+            samples[name].append(row.get(attribute))
+
+    fields = []
+    for name in order:
+        values = samples.get(name) or []
+        filled = [v for v in values if str(v if v is not None else "").strip()]
+        distinct = Counter(_clean(v) for v in filled)
+        kind = _field_kind(values)
+        fields.append({
+            "name": name,
+            # Where it came from, so the console can group "your columns" apart from
+            # "what the calls produced".
+            "source": "list" if _normalise_column(name) in uploaded_keys else "call",
+            "kind": kind,
+            "filled": len(filled),
+            "empty": len(rows) - len(filled),
+            # Only offered as a pick-list when the column is a vocabulary rather than free
+            # text; a name column has as many values as there are rows.
+            "values": (
+                [{"value": v, "count": n} for v, n in distinct.most_common(values_limit)]
+                if 0 < len(distinct) <= values_limit
+                else []
+            ),
+        })
+    return {"datasheet_id": datasheet_id, "rows": len(rows), "fields": fields}
+
+
+@app.post("/datasheets/{datasheet_id}/filter-count")
+async def datasheet_filter_count(datasheet_id: str, payload: RowFilterRequest) -> dict:
+    """How many rows this filter would call, before anyone is called.
+
+    "20,000 uploaded, 4,312 to dial" is the number an operator needs before pressing
+    start, and the same filter decides what the run actually dials.
+    """
+    sheet = await handler.db.get_datasheet(datasheet_id)
+    if not sheet:
+        raise HTTPException(status_code=404, detail="call list not found")
+    rows = sheet.get("rows") or []
+    spec = {"rules": payload.rules, "match": payload.match}
+    selected = row_filter.filter_rows(rows, spec)
+    return {"total": len(rows), "matching": len(selected)}
+
+
 @app.get("/datasheets/{datasheet_id}/export.csv")
 async def export_datasheet_csv(datasheet_id: str) -> Response:
     """The call list exactly as it was uploaded, with what the calls produced beside it.
@@ -2645,7 +2744,11 @@ async def create_campaign(payload: CampaignRequest) -> dict:
     if not template:
         raise HTTPException(status_code=404, detail="prompt template not found")
 
-    total = 1 if payload.mode == "test" else datasheet.get("row_count", 0)
+    # A run that filters its list dials the rows that pass, so that - not the whole
+    # upload - is what its counters are measured against.
+    rows = datasheet.get("rows") or []
+    selected = row_filter.filter_rows(rows, payload.row_filter)
+    total = 1 if payload.mode == "test" else len(selected)
     campaign_id = await handler.db.create_campaign(
         payload.name,
         payload.mode,
@@ -2658,6 +2761,8 @@ async def create_campaign(payload: CampaignRequest) -> dict:
         agent_id=payload.agent_id,
         agent_ids=payload.agent_ids,
     )
+    if payload.row_filter and campaign_id:
+        await handler.db.update_campaign(campaign_id, row_filter=payload.row_filter)
     # Booking it at creation saves a second call, and the sweep starts it when the time
     # comes without anybody being at a screen.
     if payload.scheduled_at and campaign_id:

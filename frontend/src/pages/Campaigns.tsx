@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { RowFilterBuilder } from "../components/RowFilterBuilder";
+import type { RowFilterSpec } from "../api/endpoints";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -82,6 +84,8 @@ export function Campaigns() {
   const nameEdited = useRef(false);
   const [mode, setMode] = useState("test");
   const [datasheetId, setDatasheetId] = useState("");
+  // Which rows of that list this run should dial - the client's own rules.
+  const [rowFilter, setRowFilter] = useState<RowFilterSpec>({ match: "all", rules: [] });
   const [useCase, setUseCase] = useState("");
   const [language, setLanguage] = useState("auto");
   // Several agents can work one campaign, so a big datasheet uses all capacity.
@@ -139,6 +143,7 @@ export function Campaigns() {
     setUseCase("");
     setLanguage("auto");
     setSelectedAgentIds([]);
+    setRowFilter({ match: "all", rules: [] });
   };
 
   const createAndLaunchMutation = useMutation({
@@ -148,6 +153,8 @@ export function Campaigns() {
         mode,
         scheduled_at: startAt ? new Date(startAt).toISOString() : undefined,
         datasheet_id: datasheetId,
+        // Only a filter with rules in it travels; an empty one would read as "call none".
+        row_filter: rowFilter.rules.length > 0 ? rowFilter : undefined,
         prompt_template_id: promptTemplateId,
         use_case: effectiveUseCase,
         language,
@@ -311,6 +318,24 @@ export function Campaigns() {
                   ))}
                 </select>
               </label>
+
+              {/* Who gets called out of that list. The fields and the values come from the
+                  list itself, so every client filters on their own vocabulary. */}
+              {mode === "production" && datasheetId && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+                  <div className="mb-2 text-xs font-medium text-slate-600">
+                    Who gets called
+                    <span className="ml-1.5 font-normal text-slate-400">
+                      no rules means the whole list
+                    </span>
+                  </div>
+                  <RowFilterBuilder
+                    datasheetId={datasheetId}
+                    value={rowFilter}
+                    onChange={setRowFilter}
+                  />
+                </div>
+              )}
 
               <label className="block text-xs font-medium text-slate-600">
                 Prompt template

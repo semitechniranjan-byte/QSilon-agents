@@ -14,6 +14,7 @@ try:
     from .datasheet_service import find_column, find_phone_column
     from .call_handler import CallHandler
     from . import call_registry
+    from . import row_filter
 except ImportError:  # pragma: no cover
     from template_service import (
         apply_format_value_transforms,
@@ -24,6 +25,7 @@ except ImportError:  # pragma: no cover
     from datasheet_service import find_column, find_phone_column
     from call_handler import CallHandler
     import call_registry
+    import row_filter
 
 logger = logging.getLogger(__name__)
 
@@ -565,6 +567,17 @@ async def run_campaign(
 
         datasheet_id = datasheet["_id"]
         rows = datasheet.get("rows", [])
+        # A run dials the rows its own filter selects. The rules belong to the client -
+        # "not the ones who already promised", "only where nobody picked up twice" - and
+        # this is the one place they are applied, so the count on the screen before the
+        # run and the rows it actually dials cannot disagree.
+        selected = row_filter.filter_rows(rows, campaign.get("row_filter"))
+        if len(selected) != len(rows):
+            logger.warning(
+                "Campaign %s: filter selects %s of %s rows",
+                campaign_id, len(selected), len(rows),
+            )
+        rows = selected
         if retries_only:
             # A sweep dials only what is due, so a campaign that finished days ago does not
             # start again from the top because one row came round for a second attempt.
