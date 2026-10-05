@@ -10,7 +10,7 @@ import {
 import type { LanguageConfig, Template, UseCase } from "../api/types";
 import { getApiUrl } from "../api/client";
 import { useDialog } from "../components/Dialog";
-import { IconX } from "../components/Icons";
+import { IconTrash, IconX } from "../components/Icons";
 
 function useSingleTemplate() {
   const queryClient = useQueryClient();
@@ -408,9 +408,10 @@ function LanguageRoutingCard({
                   delete next[value];
                   save({ language_column_mapping: next });
                 }}
-                className="rounded-md border border-slate-200 px-2 text-xs text-slate-400 hover:bg-slate-50 hover:text-red-500"
+                title="Remove this mapping"
+                className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
               >
-                
+                <IconTrash size={13} />
               </button>
             </div>
           ))}
@@ -646,10 +647,10 @@ export function Templates() {
                     </button>
                     <button
                       onClick={() => removeLanguage(k)}
-                      className="px-1 text-slate-300 hover:text-red-500"
+                      className="rounded px-1 py-0.5 text-slate-300 transition hover:bg-rose-50 hover:text-rose-600"
                       title="Remove language"
                     >
-                      
+                      <IconTrash size={12} />
                     </button>
                   </div>
                 ))}

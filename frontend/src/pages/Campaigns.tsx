@@ -726,9 +726,12 @@ export function Campaigns() {
             <button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page <= 1}
-              className="rounded-md border border-slate-200 px-2 py-1 text-xs disabled:opacity-40"
+              title="Previous page"
+              className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 disabled:opacity-40"
             >
-              
+              <span className="inline-block rotate-180">
+                <IconChevronRight size={13} />
+              </span>
             </button>
             <span className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-900">
               {page}
@@ -736,9 +739,10 @@ export function Campaigns() {
             <button
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page >= totalPages}
-              className="rounded-md border border-slate-200 px-2 py-1 text-xs disabled:opacity-40"
+              title="Next page"
+              className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 disabled:opacity-40"
             >
-              
+              <IconChevronRight size={13} />
             </button>
             <select
               value={pageSize}

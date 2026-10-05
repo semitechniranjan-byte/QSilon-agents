@@ -280,10 +280,10 @@ function RequiredColumnsCard({
             <span className="text-sm font-medium text-slate-800">{col}</span>
             <button
               onClick={() => removeColumn(col)}
-              className="text-red-400 hover:text-red-600"
-              title="Remove"
+              className="rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+              title={`Remove ${col} from this format`}
             >
-              
+              <IconTrash size={14} />
             </button>
           </div>
         ))}
@@ -488,6 +488,33 @@ function ColumnMappingsCard({
     });
   };
 
+  // Paths these mappings read from that the Result Fields catalogue has never heard of.
+  // They work - the export writes them - but they cannot be offered to the next format,
+  // which is how a report ends up with columns nobody can explain.
+  const { categories: resultFields, save: saveResultFields } = useMappingKeys();
+  const unlisted = useMemo(() => {
+    const known = new Set(availablePaths);
+    const found: string[] = [];
+    for (const path of Object.values(template.update_columns_mapping)) {
+      for (const part of String(path).split("|").map((p) => p.trim()).filter(Boolean)) {
+        if (!known.has(part) && !found.includes(part)) found.push(part);
+      }
+    }
+    return found;
+  }, [template.update_columns_mapping, availablePaths]);
+
+  const listUnknownFields = () => {
+    const next: Record<string, string[]> = { ...resultFields };
+    for (const path of unlisted) {
+      const dot = path.indexOf(".");
+      const category = dot === -1 ? "root" : path.slice(0, dot);
+      const key = dot === -1 ? path : path.slice(dot + 1);
+      const existing = next[category] ?? [];
+      if (!existing.includes(key)) next[category] = [...existing, key];
+    }
+    saveResultFields(next);
+  };
+
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md">
       <CardHeader
@@ -512,6 +539,23 @@ function ColumnMappingsCard({
           </div>
         }
       />
+
+      {unlisted.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-100 bg-amber-50/70 px-3 py-2">
+          <p className="min-w-0 text-[11px] text-amber-800">
+            {unlisted.length} field{unlisted.length === 1 ? " is" : "s are"} read here but not in
+            Result Fields, so no other format can offer {unlisted.length === 1 ? "it" : "them"}:{" "}
+            <span className="font-mono">{unlisted.slice(0, 3).join(", ")}</span>
+            {unlisted.length > 3 && ` +${unlisted.length - 3} more`}
+          </p>
+          <button
+            onClick={listUnknownFields}
+            className="shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-medium text-amber-800 transition hover:bg-amber-100"
+          >
+            Add to Result Fields
+          </button>
+        </div>
+      )}
 
       {suggestions && (
         <div className="border-b border-slate-100 bg-slate-50/70 p-3">
@@ -586,16 +630,20 @@ function ColumnMappingsCard({
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
                 <button
                   onClick={() => setModalState({ mode: "edit", outputCol })}
-                  className="text-slate-400 hover:text-slate-700"
-                  title="Edit"
+                  className="rounded p-1 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
+                  title={`Change where ${outputCol} is read from`}
                 >
-            <IconX size={16} />
-          </button>
-                <button onClick={() => removeMapping(outputCol)} className="text-red-400 hover:text-red-600" title="Delete">
-                  
+                  <IconPencil size={14} />
+                </button>
+                <button
+                  onClick={() => removeMapping(outputCol)}
+                  className="rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+                  title={`Stop writing ${outputCol} back`}
+                >
+                  <IconTrash size={14} />
                 </button>
               </div>
             </div>
@@ -627,47 +675,88 @@ function AttemptColumnsCard({
   template: DatasheetTemplate;
   save: (payload: Partial<DatasheetTemplate>) => void;
 }) {
-  const attempt = template.attempt_columns ?? [];
   const mappingKeys = Object.keys(template.update_columns_mapping);
+  // A column can only be kept per attempt if it is written back at all, and a stale name
+  // left behind by a deleted mapping would otherwise sit here promising a column the
+  // export can never fill.
+  const attempt = (template.attempt_columns ?? []).filter((col) => mappingKeys.includes(col));
+  const rest = mappingKeys.filter((col) => !attempt.includes(col));
 
-  const toggle = (col: string) => {
-    if (attempt.includes(col)) {
-      save({ attempt_columns: attempt.filter((c) => c !== col) });
-    } else {
-      save({ attempt_columns: [...attempt, col] });
-    }
-  };
+  const add = (col: string) => save({ attempt_columns: [...attempt, col] });
+  const remove = (col: string) => save({ attempt_columns: attempt.filter((c) => c !== col) });
 
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md">
       <CardHeader
         Icon={IconTag}
         accent="bg-emerald-50 text-emerald-600"
-        title="Attempt Columns"
-        action={<span className="text-xs text-slate-400">Click to toggle</span>}
+        title="Kept per attempt"
+        action={
+          <span className="text-xs text-slate-400">
+            {attempt.length === 0 ? "none yet" : `${attempt.length} of ${mappingKeys.length}`}
+          </span>
+        }
       />
-      <div className="space-y-2 p-3">
-        {mappingKeys.map((col) => {
-          const on = attempt.includes(col);
-          return (
-            <button
-              key={col}
-              onClick={() => toggle(col)}
-              className={`block w-full rounded-md border px-3 py-2 text-left text-sm font-medium transition ${
-                on
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                  : "border-slate-100 bg-slate-50 text-slate-400 hover:border-slate-200"
-              }`}
-            >
-              {col}
-              <div className="mt-0.5 font-mono text-xs opacity-70">
-                {template.update_columns_mapping[col]}
+      <div className="p-3">
+        <p className="mb-2 text-[11px] text-slate-500">
+          These columns are written again under each attempt's own number —
+          <span className="font-mono"> DISPOSITION_1_ATTEMPT</span>,
+          <span className="font-mono"> _2_ATTEMPT</span> — so a later call does not erase
+          what an earlier one found. Everything else keeps its latest value only.
+        </p>
+
+        {mappingKeys.length === 0 ? (
+          <p className="rounded-md border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-400">
+            Nothing is written back yet. Add a column mapping first.
+          </p>
+        ) : (
+          <>
+            <div className="space-y-2">
+              {attempt.map((col) => (
+                <div
+                  key={col}
+                  className="flex items-start justify-between gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-emerald-800">{col}</div>
+                    <div className="truncate font-mono text-[11px] text-emerald-700/70">
+                      {template.update_columns_mapping[col]}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => remove(col)}
+                    title={`Keep only the latest ${col}`}
+                    className="shrink-0 rounded p-1 text-emerald-600/60 transition hover:bg-white hover:text-rose-600"
+                  >
+                    <IconX size={13} />
+                  </button>
+                </div>
+              ))}
+              {attempt.length === 0 && (
+                <p className="rounded-md border border-dashed border-slate-200 px-3 py-3 text-center text-xs text-slate-400">
+                  No column is kept per attempt yet.
+                </p>
+              )}
+            </div>
+
+            {rest.length > 0 && (
+              <div className="mt-3 border-t border-slate-100 pt-3">
+                <p className="mb-1.5 text-[11px] font-medium text-slate-500">Add one</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {rest.map((col) => (
+                    <button
+                      key={col}
+                      onClick={() => add(col)}
+                      title={template.update_columns_mapping[col]}
+                      className="rounded-full border border-slate-200 px-2.5 py-1 text-xs text-slate-600 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700"
+                    >
+                      + {col}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </button>
-          );
-        })}
-        {mappingKeys.length === 0 && (
-          <p className="px-1 py-2 text-xs text-slate-400">Add column mappings first.</p>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -823,10 +912,10 @@ function CategoryCard({
         </button>
         <button
           onClick={() => onDeleteCategory(category)}
-          className="text-slate-400 hover:text-red-500"
-          title="Delete category"
+          className="rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+          title={`Delete the ${category} group and its keys`}
         >
-          
+          <IconTrash size={14} />
         </button>
       </div>
       {!collapsed && (
@@ -838,8 +927,12 @@ function CategoryCard({
                 className="flex items-center gap-1.5 rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700"
               >
                 {k}
-                <button onClick={() => onRemoveKey(category, k)} className="text-blue-400 hover:text-red-500">
-                  
+                <button
+                  onClick={() => onRemoveKey(category, k)}
+                  title={`Remove ${k}`}
+                  className="text-blue-400 transition hover:text-rose-600"
+                >
+                  <IconX size={11} />
                 </button>
               </span>
             ))}
