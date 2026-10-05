@@ -7,7 +7,6 @@ import {
   IconLogs,
   IconMic,
   IconPhone,
-  IconPlug,
   IconSettings,
   IconSpeaker,
   IconTag,
@@ -15,34 +14,19 @@ import {
 } from "../components/Icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  adoptDispositionsFromScripts,
   getAppSettings,
-  getDispositions,
   getHealth,
   getLogs,
   listProviders,
   listSupportedLanguages,
-  setDispositions,
   updateAppSettings,
 } from "../api/endpoints";
 import { useAuth } from "../context/AuthContext";
-import type { AppSettings, Disposition, ProviderCapability } from "../api/types";
+import type { AppSettings, ProviderCapability } from "../api/types";
 import { DoNotCall } from "../components/DoNotCall";
 
-const COLOR_OPTIONS = [
-  "bg-green-500",
-  "bg-blue-500",
-  "bg-yellow-500",
-  "bg-red-500",
-  "bg-indigo-500",
-  "bg-gray-500",
-  "bg-purple-500",
-  "bg-orange-500",
-  "bg-teal-500",
-  "bg-pink-500",
-];
 
-const TABS = ["Providers", "Calling", "Voice & Timing", "Dispositions", "System"] as const;
+const TABS = ["Providers", "Calling", "Voice & Timing", "System"] as const;
 type Tab = (typeof TABS)[number];
 
 /** Which AppSettings keys hold the provider + model for each capability. */
@@ -257,147 +241,6 @@ function Field({
       </div>
       {hint && <span className="mt-1 block text-[11px] text-slate-400">{hint}</span>}
     </label>
-  );
-}
-
-function DispositionsEditor() {
-  const queryClient = useQueryClient();
-  const { data } = useQuery({ queryKey: ["dispositions"], queryFn: getDispositions });
-  const [rows, setRows] = useState<Disposition[]>([]);
-
-  useEffect(() => {
-    setRows(data ?? []);
-  }, [data]);
-
-  const saveMutation = useMutation({
-    mutationFn: () => setDispositions(rows),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["dispositions"] }),
-  });
-
-  const updateRow = (
-    idx: number,
-    field: keyof Disposition,
-    value: string | string[],
-  ) => {
-    setRows(rows.map((r, i) => (i === idx ? { ...r, [field]: value } : r)));
-  };
-
-  // The scripts write their outcome tables out in full, so the list can be read from them
-  // rather than kept by hand.
-  const [importing, setImporting] = useState(false);
-  const importFromScripts = async () => {
-    setImporting(true);
-    try {
-      const res = await adoptDispositionsFromScripts();
-      const fresh = await getDispositions();
-      setRows(fresh);
-      setImportNote(
-        `Added ${res.added.length}, tagged ${res.tagged} to their scripts. ${res.total} outcomes now.`,
-      );
-    } catch (err) {
-      setImportNote((err as Error).message);
-    } finally {
-      setImporting(false);
-    }
-  };
-  const [importNote, setImportNote] = useState<string | null>(null);
-  const removeRow = (idx: number) => setRows(rows.filter((_, i) => i !== idx));
-  const addRow = () => setRows([...rows, { value: "", color: COLOR_OPTIONS[0], label: "" }]);
-
-  return (
-    <Card
-      Icon={IconPlug}
-      accent="bg-purple-50 text-purple-600"
-      title="Disposition codes"
-      subtitle="Call outcomes the analysis returns. A code with no scripts named is offered to every script; naming them keeps a collections outcome out of a real-estate call."
-      action={
-        <div className="flex gap-2">
-          <button
-            onClick={importFromScripts}
-            disabled={importing}
-            title="Read the outcomes each script defines and add the ones missing here"
-            className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-40"
-          >
-            {importing ? "Reading…" : "Import from scripts"}
-          </button>
-          <button
-            onClick={addRow}
-            className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
-          >
-            Add
-          </button>
-        </div>
-      }
-    >
-      {importNote && <p className="mb-2 text-xs text-slate-500">{importNote}</p>}
-      <div className="space-y-2">
-        {rows.map((row, idx) => (
-          <div
-            key={idx}
-            className="flex items-center gap-2 rounded-xl border border-slate-100 bg-slate-50/60 p-2 transition hover:border-slate-200 hover:bg-white"
-          >
-            <span className={`h-7 w-7 shrink-0 rounded-lg ${row.color}`} />
-            <input
-              value={row.value}
-              onChange={(e) => updateRow(idx, "value", e.target.value.toUpperCase())}
-              placeholder="PTP"
-              className="w-44 rounded-lg border border-slate-300 px-2.5 py-1.5 font-mono text-xs"
-            />
-            <input
-              value={row.label}
-              onChange={(e) => updateRow(idx, "label", e.target.value)}
-              placeholder="Promise To Pay"
-              className="flex-1 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm"
-            />
-            <input
-              value={(row.use_cases ?? []).join(", ")}
-              onChange={(e) =>
-                updateRow(
-                  idx,
-                  "use_cases",
-                  e.target.value
-                    .split(",")
-                    .map((x) => x.trim())
-                    .filter(Boolean),
-                )
-              }
-              placeholder="every script"
-              title="Scripts this outcome belongs to, comma separated. Blank means all of them."
-              className="w-52 rounded-lg border border-slate-300 px-2.5 py-1.5 font-mono text-[11px]"
-            />
-            <select
-              value={row.color}
-              onChange={(e) => updateRow(idx, "color", e.target.value)}
-              className="rounded-lg border border-slate-300 px-2 py-1.5 text-xs"
-            >
-              {COLOR_OPTIONS.map((c) => (
-                <option key={c} value={c}>
-                  {c.replace("bg-", "").replace("-500", "")}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={() => removeRow(idx)}
-              className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-400 transition hover:bg-red-50 hover:text-red-500"
-            >
-              
-            </button>
-          </div>
-        ))}
-        {rows.length === 0 && (
-          <p className="rounded-xl border border-dashed border-slate-200 py-6 text-center text-xs text-slate-400">
-            No dispositions configured yet.
-          </p>
-        )}
-      </div>
-      <button
-        onClick={() => saveMutation.mutate()}
-        disabled={saveMutation.isPending}
-        className="mt-4 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:opacity-50"
-      >
-        {saveMutation.isPending ? "Saving..." : "Save dispositions"}
-      </button>
-    </Card>
   );
 }
 
@@ -653,7 +496,6 @@ export function Settings() {
         </div>
       )}
 
-      {tab === "Dispositions" && <DispositionsEditor />}
 
       {tab === "System" && (
         <div className="space-y-4">

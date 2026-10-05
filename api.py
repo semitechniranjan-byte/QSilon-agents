@@ -1894,45 +1894,65 @@ async def adopt_dispositions_from_scripts() -> dict:
 
 @app.get("/dispositions")
 async def get_dispositions(check_unknown: bool = False, use_case: Optional[str] = None) -> dict:
-    """The configured outcome codes, and optionally the ones calls returned anyway.
+    """Every outcome this deployment actually has, and what each one means.
 
-    The list is one vertical's vocabulary - twenty-six codes, all about collecting a
-    payment - while the same deployment also runs real-estate, delivery and salon
-    scripts. Those return SV, BK and DC, which nothing recognises: they show as an
-    unlabelled grey badge, group as "unreached" on the dashboard, and land in a client's
-    report as a bare code. Nobody was told, so the drift only showed up by reading the
-    data. Asking for it says so.
+    There is no fixed vocabulary. A code exists because a script defines it or a call
+    produced it: EMI collection writes PTP and RTP, a clinic writes its own, and a new
+    client's analysis prompt brings its own set the day it is written. Keeping that list by
+    hand in Settings meant codes the model returned were unlabelled and codes nobody uses
+    any more sat in every dropdown.
+
+    Labels come from the scripts' own outcome tables, and the stored list is kept only as
+    a place to override one by hand. Nothing is hidden for being absent from it.
     """
-    configured = await handler.db.get_dispositions()
+    labels: Dict[str, str] = {}
+    scripts: Dict[str, set] = {}
+    templates = await handler.db.list_templates()
+    template = templates[0] if templates else {}
+    for case, cfg in (template.get("use_cases") or {}).items():
+        for entry in (cfg.get("languages") or {}).values():
+            for code, label in _codes_in_prompt((entry or {}).get("analysis_prompt") or "").items():
+                code = str(code).upper()
+                labels.setdefault(code, label)
+                scripts.setdefault(code, set()).add(case)
+    for item in await handler.db.get_dispositions():
+        code = str(item.get("value") or "").upper()
+        if not code:
+            continue
+        if item.get("label"):
+            labels[code] = item["label"]  # a label written by hand wins
+        for case in item.get("use_cases") or []:
+            scripts.setdefault(code, set()).add(case)
+
+    match: Dict[str, Any] = {"disposition_code": {"$nin": [None, ""]}}
     if use_case:
-        # An outcome with no scripts named belongs to all of them; one that names some is
-        # only offered where it means something.
-        configured = [
-            d for d in configured
-            if not d.get("use_cases") or use_case in (d.get("use_cases") or [])
-        ]
-    payload: dict = {"dispositions": configured}
+        match["use_case"] = use_case
+    rows = await handler.db.sessions.aggregate([
+        {"$match": match},
+        {"$group": {"_id": {"$toUpper": "$disposition_code"}, "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+    ]).to_list(300)
+    counts = {str(r["_id"]).upper(): int(r["count"]) for r in rows if r.get("_id")}
+
+    # A code a script defines but has not produced yet still belongs in a filter list.
+    for code, cases in scripts.items():
+        if use_case and cases and use_case not in cases:
+            continue
+        counts.setdefault(code, 0)
+
+    dispositions = [
+        {
+            "value": code,
+            "label": labels.get(code) or code,
+            "count": count,
+            "use_cases": sorted(scripts.get(code, ())),
+        }
+        for code, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    payload: dict = {"dispositions": dispositions}
     if check_unknown:
-        known = {str(d.get("value") or "").upper() for d in await handler.db.get_dispositions()}
-        # Count per script, so an outcome missing from real estate is not hidden by the
-        # collections codes sitting next to it.
-        rows = await handler.db.sessions.aggregate([
-            {"$match": {"disposition_code": {"$nin": [None, ""]}}},
-            {"$group": {
-                "_id": {"code": "$disposition_code", "use_case": "$use_case"},
-                "count": {"$sum": 1},
-            }},
-            {"$sort": {"count": -1}},
-        ]).to_list(200)
-        payload["unknown"] = [
-            {
-                "code": r["_id"]["code"],
-                "use_case": r["_id"].get("use_case"),
-                "count": r["count"],
-            }
-            for r in rows
-            if str(r["_id"]["code"]).upper() not in known
-        ]
+        # Codes the calls return that no script explains - worth a look, not worth hiding.
+        payload["unknown"] = [d for d in dispositions if d["label"] == d["value"] and d["count"]]
     return payload
 
 
