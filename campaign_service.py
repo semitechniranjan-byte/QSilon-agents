@@ -324,6 +324,7 @@ async def _run_one_row(
     from_number: Optional[str],
     execution_id: Optional[str],
     run_conf: Optional[dict],
+    voice_profiles: Dict[str, dict],
     max_call_seconds: int,
     semaphore: asyncio.Semaphore,
     llm_provider: Optional[str] = None,
@@ -424,7 +425,8 @@ async def _run_one_row(
                 await db.shift_campaign_stat(campaign_id, "queued", "calling")
 
                 cfg = resolve_template_config(
-                    template, row_data, language=campaign_language, use_case=campaign_use_case
+                    template, row_data, language=campaign_language, use_case=campaign_use_case,
+                    profiles=voice_profiles,
                 )
                 # The scoring prompt belongs to the variant this row resolved to, which is
                 # only known once the config is resolved. It used to be assigned above from
@@ -589,6 +591,8 @@ async def run_campaign(
 
         # Telephony/from-number now live in global settings rather than per template.
         app_settings = await db.get_app_settings()
+        # Read once for the whole run: every row resolves its voice through these.
+        voice_profiles = {str(p["_id"]): p for p in await db.list_voice_profiles()}
         # What this run was told, over what the deployment is set to. A morning reminder
         # list and an evening follow-up are the same product with different hours.
         run_conf = {
@@ -680,6 +684,7 @@ async def run_campaign(
                     from_number=from_number,
                     execution_id=execution_id,
                     run_conf=run_conf,
+                    voice_profiles=voice_profiles,
                     llm_provider=app_settings.get("llm_provider"),
                     llm_model=app_settings.get("llm_model"),
                     max_call_seconds=int(

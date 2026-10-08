@@ -132,6 +132,8 @@ export interface LanguageConfig {
   tts_lan_code?: string;
   tts_voice_id?: string;
   tts_model_id?: string;
+  /** The voice profile this language speaks with. Set, it wins over the codes above. */
+  voice_profile_id?: string;
 }
 
 /** A use case (EMI collection, sales, survey…) holding one config per language. */

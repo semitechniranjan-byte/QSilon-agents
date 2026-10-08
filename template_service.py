@@ -140,6 +140,7 @@ def resolve_template_config(
     row_data: Dict[str, Any],
     language: Optional[str] = None,
     use_case: Optional[str] = None,
+    profiles: Optional[Dict[str, dict]] = None,
 ) -> Dict[str, Any]:
     """Resolve the prompt/greeting/voice config for one row.
 
@@ -169,16 +170,30 @@ def resolve_template_config(
     entry = entry or {}
     lang_defaults = SUPPORTED_LANGUAGES.get(language_key, {})
 
+    # A voice profile is the one place a voice and its codes are set. A script that names
+    # one uses it; anything still carrying its own codes keeps working on those.
+    profile = (profiles or {}).get(str(entry.get("voice_profile_id") or "")) or {}
+
     return {
         "use_case": use_case_key,
         "language": language_key,
         "system_prompt": entry.get("prompt") or "",
         "analysis_prompt": entry.get("analysis_prompt") or "",
         "greeting_text": entry.get("greeting") or "",
-        "stt_language": entry.get("stt_lan_code") or lang_defaults.get("stt") or "en",
-        "tts_language": entry.get("tts_lan_code") or lang_defaults.get("tts") or "en",
-        "tts_voice_id": entry.get("tts_voice_id") or "",
-        "tts_model_id": entry.get("tts_model_id") or "sonic-3",
+        "voice_profile_id": str(entry.get("voice_profile_id") or ""),
+        "voice_profile_name": profile.get("name") or "",
+        "stt_language": (
+            profile.get("stt_language") or entry.get("stt_lan_code")
+            or lang_defaults.get("stt") or "en"
+        ),
+        "tts_language": (
+            profile.get("tts_language") or entry.get("tts_lan_code")
+            or lang_defaults.get("tts") or "en"
+        ),
+        "tts_voice_id": profile.get("tts_voice_id") or entry.get("tts_voice_id") or "",
+        "tts_model_id": (
+            profile.get("tts_model_id") or entry.get("tts_model_id") or "sonic-3"
+        ),
     }
 
 

@@ -2,15 +2,21 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createTemplate,
+  createVoiceProfile,
+  deleteVoiceProfile,
   listDatasheets,
   listSupportedLanguages,
   listTemplates,
+  listVoiceProfiles,
   updateTemplate,
+  updateVoiceProfile,
+  type VoiceProfile,
+  type VoiceProfileInput,
 } from "../api/endpoints";
 import type { LanguageConfig, Template, UseCase } from "../api/types";
 import { getApiUrl } from "../api/client";
 import { useDialog } from "../components/Dialog";
-import { IconTrash, IconX } from "../components/Icons";
+import { IconPencil, IconTrash, IconX } from "../components/Icons";
 
 function useSingleTemplate() {
   const queryClient = useQueryClient();
@@ -71,12 +77,15 @@ const VOICE_FIELDS = [
 function LanguageEditor({
   config,
   onSave,
+  voiceProfiles,
 }: {
   config: LanguageConfig;
   onSave: (next: LanguageConfig) => void;
+  voiceProfiles: VoiceProfile[];
 }) {
   const [draft, setDraft] = useState<LanguageConfig>(config);
   const [tab, setTab] = useState<string>("prompt");
+  const chosenProfile = voiceProfiles.find((p) => p._id === draft.voice_profile_id);
 
   useEffect(() => setDraft(config), [config]);
 
@@ -126,29 +135,70 @@ function LanguageEditor({
       ))}
 
       {tab === "voice" && (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {VOICE_FIELDS.map((f) => (
-            <label key={f.key} className="block text-xs font-medium text-slate-600">
-              {f.label}
-              <input
-                value={(draft[f.key as keyof LanguageConfig] as string) ?? ""}
-                onChange={(e) => set(f.key as keyof LanguageConfig, e.target.value)}
-                placeholder={f.placeholder}
-                className="mt-1 h-9 w-full rounded-lg border border-slate-300 px-2.5 text-sm transition focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-              />
-            </label>
-          ))}
-          <div className="sm:col-span-2">
-            <div className="text-xs font-medium text-slate-600">Voice</div>
-            <div className="mt-1 flex h-9 items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-2.5">
-              <span className="truncate font-mono text-xs text-slate-600">
-                {draft.tts_voice_id || "default voice from Settings"}
-              </span>
-              <span className="ml-auto shrink-0 text-[11px] text-slate-400">
-                set below, in Voices by use case &amp; language
-              </span>
+        <div className="space-y-4">
+          {/* One choice instead of four fields. The codes and the voice live on the
+              profile, in Voice profiles; this script simply names one. */}
+          <label className="block text-xs font-medium text-slate-600">
+            Voice profile
+            <select
+              value={draft.voice_profile_id ?? ""}
+              onChange={(e) => set("voice_profile_id" as keyof LanguageConfig, e.target.value)}
+              className="mt-1 h-9 w-full max-w-md rounded-lg border border-slate-300 px-2.5 text-sm"
+            >
+              <option value="">Use the codes set below</option>
+              {voiceProfiles.map((p) => (
+                <option key={p._id} value={p._id}>
+                  {p.name}
+                  {p.language ? ` · ${p.language}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {chosenProfile ? (
+            <div className="max-w-md rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 text-xs text-emerald-900">
+              <div className="font-medium">{chosenProfile.name} speaks this language</div>
+              <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 font-mono text-[11px] text-emerald-800/80">
+                <span>hears: {chosenProfile.stt_language || "—"}</span>
+                <span>speaks: {chosenProfile.tts_language || "—"}</span>
+                <span>model: {chosenProfile.tts_model_id || "—"}</span>
+                <span className="truncate" title={chosenProfile.tts_voice_id}>
+                  voice: {chosenProfile.tts_voice_id || "default"}
+                </span>
+              </div>
+              <p className="mt-2 text-[11px] text-emerald-800/70">
+                Change any of these in Voice profiles and every script using it follows.
+              </p>
             </div>
-          </div>
+          ) : (
+            <details className="max-w-xl rounded-lg border border-slate-200 p-3">
+              <summary className="cursor-pointer text-xs font-medium text-slate-600">
+                Codes for this language
+              </summary>
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {VOICE_FIELDS.map((f) => (
+                  <label key={f.key} className="block text-xs font-medium text-slate-600">
+                    {f.label}
+                    <input
+                      value={(draft[f.key as keyof LanguageConfig] as string) ?? ""}
+                      onChange={(e) => set(f.key as keyof LanguageConfig, e.target.value)}
+                      placeholder={f.placeholder}
+                      className="mt-1 h-9 w-full rounded-lg border border-slate-300 px-2.5 text-sm transition focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                    />
+                  </label>
+                ))}
+                <label className="block text-xs font-medium text-slate-600 sm:col-span-2">
+                  Voice
+                  <input
+                    value={draft.tts_voice_id ?? ""}
+                    onChange={(e) => set("tts_voice_id" as keyof LanguageConfig, e.target.value)}
+                    placeholder="default voice from Settings"
+                    className="mt-1 h-9 w-full rounded-lg border border-slate-300 px-2.5 font-mono text-xs"
+                  />
+                </label>
+              </div>
+            </details>
+          )}
         </div>
       )}
 
@@ -166,130 +216,182 @@ function LanguageEditor({
   );
 }
 
-/** Every use case × language voice ID in one editable grid.
- *  The per-language editor above covers one cell at a time; this is for reviewing and
- *  updating them all together, e.g. after switching voice provider. */
-function VoiceMatrixCard({
-  template,
-  save,
-  labelFor,
-}: {
-  template: Template;
-  save: (payload: Partial<Template>) => void;
-  labelFor: (k: string) => string;
-}) {
+const EMPTY_PROFILE: VoiceProfileInput = {
+  name: "",
+  language: "",
+  stt_language: "",
+  tts_language: "",
+  tts_model_id: "sonic-3",
+  tts_voice_id: "",
+  description: "",
+};
+
+/**
+ * The voices, set once.
+ *
+ * A voice and its two language codes used to be typed into every use case and every
+ * language, in two editors that wrote the same fields - so changing a voice meant finding
+ * every cell that carried it. A profile is that set of fields with a name on it; a script
+ * picks one, and changing it here changes every script that picked it.
+ */
+function VoiceProfilesCard() {
+  const queryClient = useQueryClient();
   const dialog = useDialog();
-  const useCases = template.use_cases ?? {};
-  const useCaseKeys = Object.keys(useCases);
-  const languageKeys = Array.from(
-    new Set(useCaseKeys.flatMap((uc) => Object.keys(useCases[uc]?.languages ?? {}))),
+  const { data: profiles = [], isLoading } = useQuery({
+    queryKey: ["voiceProfiles"],
+    queryFn: listVoiceProfiles,
+  });
+  const [editing, setEditing] = useState<{ id: string | null; draft: VoiceProfileInput } | null>(
+    null,
   );
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["voiceProfiles"] });
 
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const cellKey = (uc: string, lang: string) => `${uc}::${lang}`;
-
-  const valueOf = (uc: string, lang: string) => {
-    const k = cellKey(uc, lang);
-    if (k in drafts) return drafts[k];
-    return useCases[uc]?.languages?.[lang]?.tts_voice_id ?? "";
+  const saveProfile = async () => {
+    if (!editing || !editing.draft.name.trim()) return;
+    if (editing.id) await updateVoiceProfile(editing.id, editing.draft);
+    else await createVoiceProfile(editing.draft);
+    setEditing(null);
+    refresh();
   };
 
-  const dirty = Object.keys(drafts).length > 0;
-
-  const saveAll = () => {
-    const next = JSON.parse(JSON.stringify(useCases)) as Record<string, UseCase>;
-    for (const [k, v] of Object.entries(drafts)) {
-      const [uc, lang] = k.split("::");
-      if (next[uc]?.languages?.[lang]) next[uc].languages[lang].tts_voice_id = v;
-    }
-    save({ use_cases: next });
-    setDrafts({});
+  const removeProfile = async (profile: VoiceProfile) => {
+    const ok = await dialog.confirm(`Delete the "${profile.name}" voice?`, {
+      body: "Scripts that chose it fall back to their own codes until another is picked.",
+      danger: true,
+    });
+    if (!ok) return;
+    await deleteVoiceProfile(profile._id);
+    refresh();
   };
 
-  const applyToRow = async (uc: string) => {
-    const source = await dialog.prompt(
-      `Set one voice ID for every language in "${useCases[uc]?.label || uc}"`,
-      { placeholder: "Cartesia voice ID" },
-    );
-    if (source === null) return;
-    const next = { ...drafts };
-    for (const lang of Object.keys(useCases[uc]?.languages ?? {})) next[cellKey(uc, lang)] = source.trim();
-    setDrafts(next);
-  };
-
-  if (useCaseKeys.length === 0 || languageKeys.length === 0) return null;
+  const FIELDS: { key: keyof VoiceProfileInput; label: string; placeholder: string }[] = [
+    { key: "name", label: "Name", placeholder: "Hindi — Roshini" },
+    { key: "language", label: "Language", placeholder: "hindi" },
+    { key: "stt_language", label: "Hears (recognition code)", placeholder: "hi" },
+    { key: "tts_language", label: "Speaks (speech code)", placeholder: "hi" },
+    { key: "tts_model_id", label: "Voice model", placeholder: "sonic-3" },
+    { key: "tts_voice_id", label: "Voice id", placeholder: "47f3bbb1-…" },
+  ];
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-slate-900">Voices by use case &amp; language</h3>
-          <p className="text-xs text-slate-400">
-            The one place voices are set. A blank cell uses the default voice from Settings.
+          <h3 className="text-sm font-semibold text-slate-900">Voice profiles</h3>
+          <p className="mt-0.5 text-xs text-slate-500">
+            A voice and its language codes, named once. A script picks one per language
+            instead of carrying the codes itself.
           </p>
         </div>
-        {dirty && (
-          <button
-            onClick={saveAll}
-            className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700"
-          >
-            Save {Object.keys(drafts).length} change(s)
-          </button>
-        )}
+        <button
+          onClick={() => setEditing({ id: null, draft: { ...EMPTY_PROFILE } })}
+          className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-indigo-700"
+        >
+          New profile
+        </button>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-slate-50/70 text-xs uppercase tracking-wide text-indigo-700/70">
+
+      {editing && (
+        <div className="mt-4 rounded-lg border border-indigo-200 bg-indigo-50/40 p-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {FIELDS.map((f) => (
+              <label key={f.key} className="block text-xs font-medium text-slate-600">
+                {f.label}
+                <input
+                  value={(editing.draft[f.key] as string) ?? ""}
+                  onChange={(e) =>
+                    setEditing({ ...editing, draft: { ...editing.draft, [f.key]: e.target.value } })
+                  }
+                  placeholder={f.placeholder}
+                  className={`mt-1 h-9 w-full rounded-lg border border-slate-300 px-2.5 text-sm ${
+                    f.key === "tts_voice_id" ? "font-mono text-xs" : ""
+                  }`}
+                />
+              </label>
+            ))}
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              onClick={saveProfile}
+              disabled={!editing.draft.name.trim()}
+              className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-indigo-700 disabled:opacity-40"
+            >
+              {editing.id ? "Save profile" : "Create profile"}
+            </button>
+            <button
+              onClick={() => setEditing(null)}
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-white"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="border-b border-slate-100 text-[11px] uppercase tracking-wide text-slate-500">
             <tr>
-              <th className="px-4 py-2">Use case</th>
-              {languageKeys.map((lang) => (
-                <th key={lang} className="px-3 py-2 font-medium">
-                  {labelFor(lang)}
-                </th>
-              ))}
-              <th className="px-3 py-2" />
+              <th className="py-2 font-semibold">Name</th>
+              <th className="py-2 font-semibold">Language</th>
+              <th className="py-2 font-semibold">Hears</th>
+              <th className="py-2 font-semibold">Speaks</th>
+              <th className="py-2 font-semibold">Model</th>
+              <th className="py-2 font-semibold">Voice</th>
+              <th className="py-2" />
             </tr>
           </thead>
-          <tbody>
-            {useCaseKeys.map((uc) => (
-              <tr key={uc} className="border-t border-slate-100">
-                <td className="whitespace-nowrap px-4 py-2 font-medium text-slate-800">
-                  {useCases[uc]?.label || uc}
+          <tbody className="divide-y divide-slate-100">
+            {profiles.map((p) => (
+              <tr key={p._id} className="hover:bg-slate-50/60">
+                <td className="py-2 font-medium text-slate-900">{p.name}</td>
+                <td className="py-2 text-slate-600">{p.language || "—"}</td>
+                <td className="py-2 font-mono text-slate-600">{p.stt_language || "—"}</td>
+                <td className="py-2 font-mono text-slate-600">{p.tts_language || "—"}</td>
+                <td className="py-2 font-mono text-slate-600">{p.tts_model_id || "—"}</td>
+                <td className="max-w-[12rem] truncate py-2 font-mono text-slate-500" title={p.tts_voice_id}>
+                  {p.tts_voice_id || "default"}
                 </td>
-                {languageKeys.map((lang) => {
-                  const exists = !!useCases[uc]?.languages?.[lang];
-                  return (
-                    <td key={lang} className="px-3 py-2">
-                      {exists ? (
-                        <input
-                          value={valueOf(uc, lang)}
-                          onChange={(e) =>
-                            setDrafts({ ...drafts, [cellKey(uc, lang)]: e.target.value })
-                          }
-                          placeholder="default"
-                          className={`w-40 rounded-md border px-2 py-1 font-mono text-xs ${
-                            cellKey(uc, lang) in drafts
-                              ? "border-amber-300 bg-amber-50"
-                              : "border-slate-200"
-                          }`}
-                        />
-                      ) : (
-                        <span className="text-xs text-slate-300">—</span>
-                      )}
-                    </td>
-                  );
-                })}
-                <td className="px-3 py-2">
-                  <button
-                    onClick={() => applyToRow(uc)}
-                    title="Use one voice for every language in this use case"
-                    className="whitespace-nowrap rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-50"
-                  >
-                    Set all
-                  </button>
+                <td className="py-2 text-right">
+                  <div className="flex justify-end gap-1">
+                    <button
+                      onClick={() =>
+                        setEditing({
+                          id: p._id,
+                          draft: {
+                            name: p.name,
+                            language: p.language ?? "",
+                            stt_language: p.stt_language ?? "",
+                            tts_language: p.tts_language ?? "",
+                            tts_model_id: p.tts_model_id ?? "",
+                            tts_voice_id: p.tts_voice_id ?? "",
+                            description: p.description ?? "",
+                          },
+                        })
+                      }
+                      title={`Edit ${p.name}`}
+                      className="rounded p-1 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
+                    >
+                      <IconPencil size={13} />
+                    </button>
+                    <button
+                      onClick={() => removeProfile(p)}
+                      title={`Delete ${p.name}`}
+                      className="rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+                    >
+                      <IconTrash size={13} />
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
+            {!isLoading && profiles.length === 0 && (
+              <tr>
+                <td colSpan={7} className="py-5 text-center text-slate-400">
+                  No voices yet. Make one and every script can pick it.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -430,6 +532,10 @@ export function Templates() {
   const dialog = useDialog();
   const { template, isLoading, saveMutation, loadError } = useSingleTemplate();
   const { data: supported } = useQuery({ queryKey: ["languages"], queryFn: listSupportedLanguages });
+  const { data: voiceProfiles = [] } = useQuery({
+    queryKey: ["voiceProfiles"],
+    queryFn: listVoiceProfiles,
+  });
 
   const [useCaseKey, setUseCaseKey] = useState<string>("");
   const [languageKey, setLanguageKey] = useState<string>("");
@@ -687,6 +793,7 @@ export function Templates() {
                     key={`${useCaseKey}:${languageKey}`}
                     config={activeUseCase.languages[languageKey]}
                     onSave={saveLanguage}
+                    voiceProfiles={voiceProfiles}
                   />
                 </>
               ) : (
@@ -695,7 +802,7 @@ export function Templates() {
             </div>
           </div>
 
-          <VoiceMatrixCard template={template} save={save} labelFor={labelFor} />
+          <VoiceProfilesCard />
 
           <LanguageRoutingCard template={template} save={save} languageKeys={languageKeys} />
         </>

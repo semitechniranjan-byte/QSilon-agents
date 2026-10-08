@@ -558,6 +558,34 @@ export const getAppSettings = () =>
   api.get<AppSettingsResponse>("/settings").then((r) => r.data);
 export const updateAppSettings = (payload: AppSettings) =>
   api.put<AppSettingsResponse>("/settings", payload).then((r) => r.data);
+/**
+ * A named voice and the codes that go with it.
+ *
+ * Set once here; a script picks one by name instead of carrying four fields of its own
+ * in two different editors.
+ */
+export interface VoiceProfile {
+  _id: string;
+  name: string;
+  language?: string;
+  stt_language?: string;
+  tts_language?: string;
+  tts_model_id?: string;
+  tts_voice_id?: string;
+  description?: string;
+}
+
+export type VoiceProfileInput = Omit<VoiceProfile, "_id">;
+
+export const listVoiceProfiles = () =>
+  api.get<{ voice_profiles: VoiceProfile[] }>("/voice-profiles").then((r) => r.data.voice_profiles);
+export const createVoiceProfile = (payload: VoiceProfileInput) =>
+  api.post<{ voice_profile_id: string }>("/voice-profiles", payload).then((r) => r.data);
+export const updateVoiceProfile = (id: string, payload: VoiceProfileInput) =>
+  api.put(`/voice-profiles/${id}`, payload).then((r) => r.data);
+export const deleteVoiceProfile = (id: string) =>
+  api.delete(`/voice-profiles/${id}`).then((r) => r.data);
+
 export const listSupportedLanguages = () =>
   api.get<{ languages: SupportedLanguage[] }>("/languages").then((r) => r.data.languages);
 

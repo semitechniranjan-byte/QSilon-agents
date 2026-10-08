@@ -567,7 +567,8 @@ async def create_outbound_call(payload: OutboundCallRequest) -> dict:
             raise HTTPException(status_code=400, detail="no prompt template configured")
 
         resolved = resolve_template_config(
-            template, format_values, language=payload.language, use_case=payload.use_case
+            template, format_values, language=payload.language, use_case=payload.use_case,
+            profiles=await _voice_profiles_by_id(),
         )
         system_prompt = system_prompt or resolved["system_prompt"]
         greeting_text = greeting_text or resolved["greeting_text"]
@@ -2173,6 +2174,53 @@ async def report_calls_csv(
 #: DISPOSITION_2_ATTEMPT -> ("DISPOSITION", 2). The suffix is how a result sheet keeps
 #: every attempt instead of only the last one.
 _ATTEMPT_COLUMN = re.compile(r"^(?P<column>.+)_(?P<attempt>\d+)_ATTEMPT$")
+
+
+async def _voice_profiles_by_id() -> Dict[str, dict]:
+    """Every voice profile, keyed by id, for resolving a script's chosen voice."""
+    return {str(p["_id"]): p for p in await handler.db.list_voice_profiles()}
+
+
+class VoiceProfileRequest(BaseModel):
+    """A named voice and the codes that go with it, set once and chosen by a script."""
+
+    name: str
+    language: Optional[str] = None
+    stt_language: Optional[str] = None
+    tts_language: Optional[str] = None
+    tts_model_id: Optional[str] = None
+    tts_voice_id: Optional[str] = None
+    description: Optional[str] = None
+
+
+@app.get("/voice-profiles")
+async def list_voice_profiles() -> dict:
+    return {"voice_profiles": await handler.db.list_voice_profiles()}
+
+
+@app.post("/voice-profiles", dependencies=[Depends(require_admin)])
+async def create_voice_profile(payload: VoiceProfileRequest) -> dict:
+    profile_id = await handler.db.create_voice_profile(
+        {k: v for k, v in payload.model_dump().items() if v is not None}
+    )
+    return {"voice_profile_id": profile_id}
+
+
+@app.put("/voice-profiles/{profile_id}", dependencies=[Depends(require_admin)])
+async def update_voice_profile(profile_id: str, payload: VoiceProfileRequest) -> dict:
+    ok = await handler.db.update_voice_profile(
+        profile_id, {k: v for k, v in payload.model_dump().items() if v is not None}
+    )
+    if not ok and not await handler.db.get_voice_profile(profile_id):
+        raise HTTPException(status_code=404, detail="voice profile not found")
+    return {"voice_profile_id": profile_id, "updated": ok}
+
+
+@app.delete("/voice-profiles/{profile_id}", dependencies=[Depends(require_admin)])
+async def delete_voice_profile(profile_id: str) -> dict:
+    """Remove a profile. Scripts that chose it fall back to their own codes."""
+    removed = await handler.db.delete_voice_profile(profile_id)
+    return {"voice_profile_id": profile_id, "removed": removed}
 
 
 class RowFilterRequest(BaseModel):

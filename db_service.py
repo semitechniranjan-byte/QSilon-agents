@@ -34,6 +34,9 @@ class DatabaseService:
         # threats, and anyone who asked to be left alone.
         self.suppressions = self.db["suppressions"]
         self.mapping_keys = self.db["mapping_keys"]
+        # A named voice and its language codes, kept once and chosen by a script. The
+        # same four fields used to be typed into every use case and language.
+        self.voice_profiles = self.db["voice_profiles"]
         self.app_settings = self.db["app_settings"]
         self.ready = False
 
@@ -260,6 +263,59 @@ class DatabaseService:
         }
         result = await self.datasheet_templates.insert_one(doc)
         return str(result.inserted_id)
+
+    # ---- Voice profiles ---------------------------------------------------------------
+    # One named voice with its language codes, so a script picks a profile instead of
+    # repeating four fields per use case and per language in two different places.
+
+    async def list_voice_profiles(self) -> list[dict]:
+        if not self.ready:
+            return []
+        items = []
+        async for doc in self.voice_profiles.find().sort("name", 1):
+            doc["_id"] = str(doc.get("_id"))
+            items.append(doc)
+        return items
+
+    async def get_voice_profile(self, profile_id: str) -> Optional[dict]:
+        if not self.ready or not profile_id:
+            return None
+        try:
+            doc = await self.voice_profiles.find_one({"_id": ObjectId(profile_id)})
+        except Exception:
+            return None
+        if doc:
+            doc["_id"] = str(doc.get("_id"))
+        return doc
+
+    async def create_voice_profile(self, data: dict) -> str:
+        if not self.ready:
+            return ""
+        result = await self.voice_profiles.insert_one({
+            **data, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow(),
+        })
+        return str(result.inserted_id)
+
+    async def update_voice_profile(self, profile_id: str, data: dict) -> bool:
+        if not self.ready:
+            return False
+        try:
+            result = await self.voice_profiles.update_one(
+                {"_id": ObjectId(profile_id)},
+                {"$set": {**data, "updated_at": datetime.utcnow()}},
+            )
+        except Exception:
+            return False
+        return result.modified_count > 0
+
+    async def delete_voice_profile(self, profile_id: str) -> bool:
+        if not self.ready:
+            return False
+        try:
+            result = await self.voice_profiles.delete_one({"_id": ObjectId(profile_id)})
+        except Exception:
+            return False
+        return result.deleted_count > 0
 
     async def list_datasheet_templates(self) -> list[dict]:
         if not self.ready:
