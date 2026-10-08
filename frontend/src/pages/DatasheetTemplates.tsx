@@ -39,7 +39,6 @@ import {
   IconPhone,
   IconSearch,
   IconTable,
-  IconTag,
   IconTrash,
   IconX,
 } from "../components/Icons";
@@ -231,6 +230,20 @@ function RequiredColumnsCard({
   const removeColumn = (col: string) => {
     save({ required_columns: template.required_columns.filter((c) => c !== col) });
   };
+  // A column typed with a typo, or renamed in the client's export, had to be deleted and
+  // added again - which lost its place in the order.
+  const renameColumn = async (col: string) => {
+    const next = (await dialog.prompt(`Rename "${col}"`, { defaultValue: col }))?.trim();
+    if (!next || next === col || template.required_columns.includes(next)) return;
+    save({
+      required_columns: template.required_columns.map((c) => (c === col ? next : c)),
+    });
+  };
+
+  const [filter, setFilter] = useState("");
+  const shown = template.required_columns.filter((c) =>
+    c.toLowerCase().includes(filter.trim().toLowerCase()),
+  );
 
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md">
@@ -239,7 +252,10 @@ function RequiredColumnsCard({
         accent="bg-blue-50 text-blue-600"
         title="Required Columns"
         action={
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-400">
+              {template.required_columns.length} the file must have
+            </span>
             <input
               ref={fileRef}
               type="file"
@@ -271,24 +287,48 @@ function RequiredColumnsCard({
           {readNote}
         </p>
       )}
-      <div className="space-y-2 p-3">
-        {template.required_columns.map((col) => (
-          <div
+      {/* A client's file has thirty columns; one tall row each turned this into a page of
+          scrolling. They are names - chips read faster and fit. */}
+      {template.required_columns.length > 10 && (
+        <div className="border-b border-slate-100 px-3 py-2">
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder={`Search ${template.required_columns.length} columns`}
+            className="h-8 w-full rounded-lg border border-slate-200 px-2.5 text-xs"
+          />
+        </div>
+      )}
+      <div className="flex flex-wrap gap-1.5 p-3">
+        {shown.map((col) => (
+          <span
             key={col}
-            className="flex items-center justify-between rounded-md border border-slate-100 bg-slate-50 px-3 py-2 transition hover:border-blue-200 hover:bg-blue-50/50"
+            className="group inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 py-1 pl-2.5 pr-1 text-xs font-medium text-slate-700"
           >
-            <span className="text-sm font-medium text-slate-800">{col}</span>
+            {col}
+            <button
+              onClick={() => renameColumn(col)}
+              title={`Rename ${col}`}
+              className="rounded p-0.5 text-slate-300 transition hover:bg-white hover:text-slate-600"
+            >
+              <IconPencil size={11} />
+            </button>
             <button
               onClick={() => removeColumn(col)}
-              className="rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
               title={`Remove ${col} from this format`}
+              className="rounded p-0.5 text-slate-300 transition hover:bg-rose-50 hover:text-rose-600"
             >
-              <IconTrash size={14} />
+              <IconTrash size={11} />
             </button>
-          </div>
+          </span>
         ))}
         {template.required_columns.length === 0 && (
-          <p className="px-1 py-2 text-xs text-slate-400">No required columns yet.</p>
+          <p className="px-1 py-2 text-xs text-slate-400">
+            No required columns yet — "Read from file" takes them from a spreadsheet's header.
+          </p>
+        )}
+        {template.required_columns.length > 0 && shown.length === 0 && (
+          <p className="px-1 py-2 text-xs text-slate-400">Nothing matches "{filter}".</p>
         )}
       </div>
     </div>
@@ -476,7 +516,19 @@ function ColumnMappingsCard({
   };
 
   const saveMapping = (outputCol: string, path: string) => {
-    save({ update_columns_mapping: { ...template.update_columns_mapping, [outputCol]: path } });
+    const previous = modalState?.mode === "edit" ? modalState.outputCol : null;
+    const next = { ...template.update_columns_mapping };
+    // Renaming used to leave the old column behind, so the sheet grew a duplicate that
+    // nothing wrote to.
+    if (previous && previous !== outputCol) delete next[previous];
+    next[outputCol] = path;
+    save({
+      update_columns_mapping: next,
+      attempt_columns:
+        previous && previous !== outputCol
+          ? attempt.map((c) => (c === previous ? outputCol : c))
+          : attempt,
+    });
     setModalState(null);
   };
   const removeMapping = (outputCol: string) => {
@@ -503,6 +555,20 @@ function ColumnMappingsCard({
     return found;
   }, [template.update_columns_mapping, availablePaths]);
 
+  const toggleAttempt = (col: string) =>
+    save({
+      attempt_columns: attempt.includes(col)
+        ? attempt.filter((c) => c !== col)
+        : [...attempt, col],
+    });
+
+  const [filter, setFilter] = useState("");
+  const shown = Object.entries(template.update_columns_mapping).filter(
+    ([col, path]) =>
+      col.toLowerCase().includes(filter.trim().toLowerCase()) ||
+      String(path).toLowerCase().includes(filter.trim().toLowerCase()),
+  );
+
   const listUnknownFields = () => {
     const next: Record<string, string[]> = { ...resultFields };
     for (const path of unlisted) {
@@ -520,9 +586,13 @@ function ColumnMappingsCard({
       <CardHeader
         Icon={IconDatabase}
         accent="bg-slate-50 text-indigo-600"
-        title="Column Mappings"
+        title="Written back after each call"
         action={
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-400">
+              {Object.keys(template.update_columns_mapping).length} columns
+              {attempt.length > 0 && ` · ${attempt.length} per attempt`}
+            </span>
             <button
               onClick={findSuggestions}
               disabled={suggesting}
@@ -615,43 +685,74 @@ function ColumnMappingsCard({
         </div>
       )}
 
-      <div className="space-y-2 p-3">
-        {Object.entries(template.update_columns_mapping).map(([outputCol, path]) => (
-          <div
-            key={outputCol}
-            className="rounded-md border border-slate-100 bg-slate-50 px-3 py-2 transition hover:border-violet-200 hover:bg-slate-50/50"
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-slate-800">{outputCol}</span>
-                {attempt.includes(outputCol) && (
-                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
-                    Attempt
-                  </span>
-                )}
+      {Object.keys(template.update_columns_mapping).length > 8 && (
+        <div className="border-b border-slate-100 px-3 py-2">
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder={`Search ${Object.keys(template.update_columns_mapping).length} columns`}
+            className="h-8 w-full rounded-lg border border-slate-200 px-2.5 text-xs"
+          />
+        </div>
+      )}
+      {/* One row per column: what it is called in the sheet, where its value is read from,
+          and whether every attempt keeps its own copy. The attempt toggle used to live in
+          a third column of its own, which meant scrolling two lists to answer one
+          question. */}
+      <div className="divide-y divide-slate-100">
+        {shown.map(([outputCol, path]) => {
+          const perAttempt = attempt.includes(outputCol);
+          return (
+            <div
+              key={outputCol}
+              className="flex items-center gap-2 px-3 py-2 transition hover:bg-slate-50/70"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold text-slate-800">{outputCol}</div>
+                <div className="truncate font-mono text-[11px] text-slate-500" title={path}>
+                  {path}
+                </div>
               </div>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setModalState({ mode: "edit", outputCol })}
-                  className="rounded p-1 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
-                  title={`Change where ${outputCol} is read from`}
-                >
-                  <IconPencil size={14} />
-                </button>
-                <button
-                  onClick={() => removeMapping(outputCol)}
-                  className="rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
-                  title={`Stop writing ${outputCol} back`}
-                >
-                  <IconTrash size={14} />
-                </button>
-              </div>
+              <button
+                onClick={() => toggleAttempt(outputCol)}
+                title={
+                  perAttempt
+                    ? `Every attempt keeps its own ${outputCol} — click to keep only the latest`
+                    : `Only the latest ${outputCol} is kept — click to keep one per attempt`
+                }
+                className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium transition ${
+                  perAttempt
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border-slate-200 text-slate-400 hover:border-emerald-200 hover:text-emerald-600"
+                }`}
+              >
+                per attempt
+              </button>
+              <button
+                onClick={() => setModalState({ mode: "edit", outputCol })}
+                className="shrink-0 rounded p-1 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
+                title={`Rename ${outputCol}, or change where it is read from`}
+              >
+                <IconPencil size={13} />
+              </button>
+              <button
+                onClick={() => removeMapping(outputCol)}
+                className="shrink-0 rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+                title={`Stop writing ${outputCol} back`}
+              >
+                <IconTrash size={13} />
+              </button>
             </div>
-            <div className="mt-0.5 font-mono text-xs text-slate-500">{path}</div>
-          </div>
-        ))}
+          );
+        })}
         {Object.keys(template.update_columns_mapping).length === 0 && (
-          <p className="px-1 py-2 text-xs text-slate-400">No column mappings yet.</p>
+          <p className="px-3 py-4 text-xs text-slate-400">
+            Nothing is written back yet. "Suggest" reads what recent calls produce and
+            proposes the columns for you.
+          </p>
+        )}
+        {Object.keys(template.update_columns_mapping).length > 0 && shown.length === 0 && (
+          <p className="px-3 py-4 text-xs text-slate-400">Nothing matches "{filter}".</p>
         )}
       </div>
 
@@ -664,101 +765,6 @@ function ColumnMappingsCard({
           onClose={() => setModalState(null)}
         />
       )}
-    </div>
-  );
-}
-
-function AttemptColumnsCard({
-  template,
-  save,
-}: {
-  template: DatasheetTemplate;
-  save: (payload: Partial<DatasheetTemplate>) => void;
-}) {
-  const mappingKeys = Object.keys(template.update_columns_mapping);
-  // A column can only be kept per attempt if it is written back at all, and a stale name
-  // left behind by a deleted mapping would otherwise sit here promising a column the
-  // export can never fill.
-  const attempt = (template.attempt_columns ?? []).filter((col) => mappingKeys.includes(col));
-  const rest = mappingKeys.filter((col) => !attempt.includes(col));
-
-  const add = (col: string) => save({ attempt_columns: [...attempt, col] });
-  const remove = (col: string) => save({ attempt_columns: attempt.filter((c) => c !== col) });
-
-  return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md">
-      <CardHeader
-        Icon={IconTag}
-        accent="bg-emerald-50 text-emerald-600"
-        title="Kept per attempt"
-        action={
-          <span className="text-xs text-slate-400">
-            {attempt.length === 0 ? "none yet" : `${attempt.length} of ${mappingKeys.length}`}
-          </span>
-        }
-      />
-      <div className="p-3">
-        <p className="mb-2 text-[11px] text-slate-500">
-          These columns are written again under each attempt's own number —
-          <span className="font-mono"> DISPOSITION_1_ATTEMPT</span>,
-          <span className="font-mono"> _2_ATTEMPT</span> — so a later call does not erase
-          what an earlier one found. Everything else keeps its latest value only.
-        </p>
-
-        {mappingKeys.length === 0 ? (
-          <p className="rounded-md border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-400">
-            Nothing is written back yet. Add a column mapping first.
-          </p>
-        ) : (
-          <>
-            <div className="space-y-2">
-              {attempt.map((col) => (
-                <div
-                  key={col}
-                  className="flex items-start justify-between gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2"
-                >
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-emerald-800">{col}</div>
-                    <div className="truncate font-mono text-[11px] text-emerald-700/70">
-                      {template.update_columns_mapping[col]}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => remove(col)}
-                    title={`Keep only the latest ${col}`}
-                    className="shrink-0 rounded p-1 text-emerald-600/60 transition hover:bg-white hover:text-rose-600"
-                  >
-                    <IconX size={13} />
-                  </button>
-                </div>
-              ))}
-              {attempt.length === 0 && (
-                <p className="rounded-md border border-dashed border-slate-200 px-3 py-3 text-center text-xs text-slate-400">
-                  No column is kept per attempt yet.
-                </p>
-              )}
-            </div>
-
-            {rest.length > 0 && (
-              <div className="mt-3 border-t border-slate-100 pt-3">
-                <p className="mb-1.5 text-[11px] font-medium text-slate-500">Add one</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {rest.map((col) => (
-                    <button
-                      key={col}
-                      onClick={() => add(col)}
-                      title={template.update_columns_mapping[col]}
-                      className="rounded-full border border-slate-200 px-2.5 py-1 text-xs text-slate-600 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700"
-                    >
-                      + {col}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </div>
     </div>
   );
 }
@@ -1216,10 +1222,20 @@ function TemplatesTab({ availablePaths }: { availablePaths: string[] }) {
           </div>
         </div>
         <h2 className="text-lg font-semibold text-slate-900">{editingTemplate.name}</h2>
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <RequiredColumnsCard template={editingTemplate} save={save} />
-          <ColumnMappingsCard template={editingTemplate} save={save} availablePaths={availablePaths} />
-          <AttemptColumnsCard template={editingTemplate} save={save} />
+        {/* Two panels, not three: what the file must bring, and what the calls write back.
+            Whether a column is kept per attempt is a property of that column, so it is a
+            toggle on its row rather than a third list to cross-reference. */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
+          <div className="lg:col-span-2">
+            <RequiredColumnsCard template={editingTemplate} save={save} />
+          </div>
+          <div className="lg:col-span-3">
+            <ColumnMappingsCard
+              template={editingTemplate}
+              save={save}
+              availablePaths={availablePaths}
+            />
+          </div>
         </div>
       </div>
     );
