@@ -31,6 +31,7 @@ try:
     from .providers import describe_providers
     from . import call_registry
     from . import row_filter
+    from . import row_sync
 except ImportError:  # pragma: no cover
     from analyze_sessions import router as analyze_sessions_router, init_analyze_sessions
     from call_handler import CallHandler, LLM_HEDGE_AFTER_SECONDS
@@ -42,6 +43,7 @@ except ImportError:  # pragma: no cover
     from providers import describe_providers
     import call_registry
     import row_filter
+    import row_sync
 
 app = FastAPI(title="Minimal Voice Clone API")
 # When the built frontend is served by this same app the origin matches and CORS is moot,
@@ -789,7 +791,7 @@ async def recall_session(session_id: str) -> dict:
     if session.get("active"):
         raise HTTPException(status_code=409, detail="that call is still running")
 
-    return await create_outbound_call(
+    result = await create_outbound_call(
         OutboundCallRequest(
             to_number=number,
             format_values=session.get("format_values") or {},
@@ -798,6 +800,40 @@ async def recall_session(session_id: str) -> dict:
             language=session.get("language"),
         )
     )
+    await _carry_row_link(session, (result or {}).get("session_id"))
+    return result
+
+
+async def _carry_row_link(previous: dict, new_session_id: Optional[str]) -> None:
+    """Keep a re-dial attached to the list row it came from, and count the attempt.
+
+    A call placed by hand - Call again, or a batch from an outcome tile - used to lose the
+    row it belonged to, so the client's sheet showed only what the dialler had done. The
+    row is the same row; this is simply another attempt at it.
+    """
+    datasheet_id = previous.get("datasheet_id")
+    row_index = previous.get("row_index")
+    if not new_session_id or not datasheet_id or row_index is None:
+        return
+    try:
+        row_index = int(row_index)
+        await handler.db.update_session(
+            new_session_id,
+            datasheet_id=datasheet_id,
+            row_index=row_index,
+            campaign_id=previous.get("campaign_id"),
+        )
+        row = await handler.db.get_datasheet_row(datasheet_id, row_index) or {}
+        await handler.db.update_datasheet_row(
+            datasheet_id,
+            row_index,
+            session_id=new_session_id,
+            attempt_count=int(row.get("attempt_count") or 0) + 1,
+            last_attempt_at=datetime.utcnow(),
+            status="calling",
+        )
+    except Exception as exc:
+        logger.warning("Could not attach %s to its list row: %s", new_session_id, exc)
 
 
 # ---- Calling a whole outcome back -----------------------------------------------------
@@ -858,6 +894,8 @@ async def _recall_targets(payload: RecallBatchRequest) -> tuple:
     fields = {
         "session_id": 1, "phone_number": 1, "format_values": 1, "dynamic_fields": 1,
         "use_case": 1, "language": 1, "created_at": 1,
+        # Carried onto the new call so the client's sheet records this attempt too.
+        "datasheet_id": 1, "row_index": 1, "campaign_id": 1,
     }
     wanted = max(1, min(payload.limit, RECALL_BATCH_MAX))
     cursor = handler.db.sessions.find(query, fields).sort("created_at", -1).limit(RECALL_SCAN_MAX)
@@ -917,6 +955,9 @@ async def _run_recall_batch(run_id: str) -> None:
                         )
                     )
                     run["placed"] += 1
+                    # The batch dials the newest call of each customer, and that call may
+                    # have come from a list; this one belongs to the same row.
+                    await _carry_row_link(target, (result or {}).get("session_id"))
                 except HTTPException as exc:
                     run["failed"] += 1
                     run["errors"].append(f"{number}: {exc.detail}")
@@ -1190,6 +1231,9 @@ async def hangup_callback(request: Request) -> JSONResponse:
         }
         await handler.db.mark_session_state(session_id, "ended", hangup_source="callback", call_status=call_status, call_info=call_info)
         await handler.finalize_call(session_id, status="completed", reason="hangup_callback")
+        # The carrier's own numbers - duration, end time, hangup cause - only exist now, and
+        # the client's sheet has columns for them.
+        await row_sync.sync_row_from_session(handler.db, session_id)
     return JSONResponse({"status": "ok", "session_id": session_id})
 
 
@@ -1253,6 +1297,7 @@ async def vobiz_hangup(request: Request) -> JSONResponse:
             call_status=call_status, call_info=call_info,
         )
         await handler.finalize_call(session_id, status="completed", reason="vobiz_hangup_callback")
+        await row_sync.sync_row_from_session(handler.db, session_id)
     return JSONResponse({"status": "ok", "session_id": session_id})
 
 
@@ -1301,6 +1346,7 @@ async def plivo_hangup(request: Request) -> JSONResponse:
             call_status=call_status, call_info=call_info,
         )
         await handler.finalize_call(session_id, status="completed", reason="plivo_hangup_callback")
+        await row_sync.sync_row_from_session(handler.db, session_id)
     return JSONResponse({"status": "ok", "session_id": session_id})
 
 

@@ -7,25 +7,23 @@ from typing import Any, Dict, Optional
 try:
     from .template_service import (
         apply_format_value_transforms,
-        apply_update_columns_mapping,
-        attempt_history_updates,
         resolve_template_config,
     )
     from .datasheet_service import find_column, find_phone_column
     from .call_handler import CallHandler
     from . import call_registry
     from . import row_filter
+    from . import row_sync
 except ImportError:  # pragma: no cover
     from template_service import (
         apply_format_value_transforms,
-        apply_update_columns_mapping,
-        attempt_history_updates,
         resolve_template_config,
     )
     from datasheet_service import find_column, find_phone_column
     from call_handler import CallHandler
     import call_registry
     import row_filter
+    import row_sync
 
 logger = logging.getLogger(__name__)
 
@@ -325,8 +323,6 @@ async def _run_one_row(
     provider: str,
     from_number: Optional[str],
     execution_id: Optional[str],
-    update_columns_mapping: dict,
-    attempt_columns: Optional[list],
     run_conf: Optional[dict],
     max_call_seconds: int,
     semaphore: asyncio.Semaphore,
@@ -459,10 +455,18 @@ async def _run_one_row(
                     return
 
                 session_id = result.get("session_id")
+                # Count the attempt as it is placed, not after it ends. The counter was
+                # never moved at all before, so "attempts >= max_attempts" could not become
+                # true and an unanswered row was retried for ever; counting it here also
+                # means everything that writes results later - the scorer, a late carrier
+                # webhook - knows which attempt it is filling in.
+                attempt_no = int((row.get("attempt_count") or 0)) + 1
                 await db.update_datasheet_row(
                     datasheet_id,
                     row_index,
                     session_id=session_id,
+                    attempt_count=attempt_no,
+                    last_attempt_at=datetime.utcnow(),
                     language=cfg.get("language"),
                     use_case=cfg.get("use_case"),
                     agent_name=agent_name,
@@ -508,29 +512,10 @@ async def _run_one_row(
                     handler, datasheet_id, row_index, session_id if telephony_ok else None, cfg["analysis_prompt"]
                 )
 
-                # Count the attempt the moment it finishes. The counter was never
-                # incremented: a row nobody answered was booked for another try for ever,
-                # since "attempts >= max_attempts" could not become true. It is also what
-                # the client's sheet reports and what a filter like "fewer than 3 tries"
-                # reads.
-                row_before = await db.get_datasheet_row(datasheet_id, row_index)
-                attempt_no = int((row_before or {}).get("attempt_count") or 0) + 1
-                writes: Dict[str, Any] = {
-                    "attempt_count": attempt_no,
-                    "last_attempt_at": datetime.utcnow(),
-                }
-                if update_columns_mapping:
-                    session_doc = await db.get_session(session_id) if session_id else None
-                    mapped_updates = apply_update_columns_mapping(session_doc, update_columns_mapping)
-                    if mapped_updates:
-                        writes.update(mapped_updates)
-                        # ...and the same values under this attempt's own number, so the
-                        # fifth call does not erase what the first one found.
-                        writes.update(
-                            attempt_history_updates(mapped_updates, attempt_columns, attempt_no)
-                        )
-                        writes["data.ATTEMPT_COUNT"] = attempt_no
-                await db.update_datasheet_row(datasheet_id, row_index, **writes)
+                # Fill the row from the session. This runs again from the scorer and from
+                # the carrier's hangup webhook, because both arrive after the call ends and
+                # each brings columns this first pass cannot have yet.
+                await row_sync.sync_row_from_session(db, session_id)
 
                 refreshed_row = await db.get_datasheet_row(datasheet_id, row_index)
                 final_status = (refreshed_row or {}).get("status") or "failed"
@@ -559,11 +544,6 @@ async def run_campaign(
         if not datasheet or not template:
             await db.update_campaign(campaign_id, status="failed")
             return
-
-        datasheet_template = await db.get_datasheet_template(datasheet.get("datasheet_template_id", ""))
-        update_columns_mapping = (datasheet_template or {}).get("update_columns_mapping") or {}
-        # Which of those columns are also kept per attempt, as DISPOSITION_1_ATTEMPT and so on.
-        attempt_columns = (datasheet_template or {}).get("attempt_columns") or []
 
         execution_id = campaign.get("execution_id")
         if not execution_id:
@@ -696,8 +676,6 @@ async def run_campaign(
                     provider=provider,
                     from_number=from_number,
                     execution_id=execution_id,
-                    update_columns_mapping=update_columns_mapping,
-                    attempt_columns=attempt_columns,
                     run_conf=run_conf,
                     llm_provider=app_settings.get("llm_provider"),
                     llm_model=app_settings.get("llm_model"),

@@ -21,6 +21,7 @@ try:
     from .config import settings
     from .helper_utils import format_prompt_with_placeholders
     from .audio_utils import mulaw_to_linear16, rms
+    from . import row_sync
 except ImportError:  # pragma: no cover
     from db_service import DatabaseService
     from stt_service import DeepgramSTTService
@@ -35,6 +36,7 @@ except ImportError:  # pragma: no cover
     from config import settings
     from helper_utils import format_prompt_with_placeholders
     from audio_utils import mulaw_to_linear16, rms
+    import row_sync
 
 logger = logging.getLogger(__name__)
 
@@ -1644,8 +1646,10 @@ class CallHandler:
         try:
             history = await self.db.get_conversation_history(session_id)
             if not history:
-                # Nobody spoke: there is nothing to analyse, but the outcome is still known.
+                # Nobody spoke: there is nothing to analyse, but the outcome is still known,
+                # and an unanswered attempt belongs in the client's sheet like any other.
                 await self.db.update_session(session_id, disposition_code="NR")
+                await row_sync.sync_row_from_session(self.db, session_id)
                 return
 
             analysis_prompt = await self._resolve_analysis_prompt(session_id)
@@ -1679,6 +1683,9 @@ class CallHandler:
             logger.warning("ANALYSIS [%s] disposition=%s", session_id, code)
         except Exception as exc:
             logger.warning("ANALYSIS [%s] failed: %s", session_id, exc)
+        # The outcome is only useful to a client inside the sheet they uploaded, and this
+        # is the moment it exists. Harmless for a call that belongs to no row.
+        await row_sync.sync_row_from_session(self.db, session_id)
 
     async def process_buffer(self) -> None:
         if self.call_ending or self.should_end_call or self.greeting_in_progress:
