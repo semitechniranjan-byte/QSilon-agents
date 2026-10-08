@@ -38,6 +38,7 @@ import {
   IconDownload,
   IconFile,
   IconPencil,
+  IconPlus,
   IconPhone,
   IconSearch,
   IconTable,
@@ -989,69 +990,108 @@ function DownloadJsonButton({ template }: { template: DatasheetTemplate }) {
   );
 }
 
+type FieldChip = {
+  key: string;
+  path: string;
+  /** Share of recently sampled calls that carry it, or null when nothing has been sampled. */
+  coverage: number | null;
+  /** How many list formats read from it. */
+  usedBy: number;
+};
+
 function CategoryCard({
   category,
-  keys,
+  fields,
+  sampled,
   onAddKey,
   onRemoveKey,
   onDeleteCategory,
 }: {
   category: string;
-  keys: string[];
+  fields: FieldChip[];
+  sampled: number;
   onAddKey: (category: string) => void;
   onRemoveKey: (category: string, key: string) => void;
   onDeleteCategory: (category: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const used = fields.filter((f) => f.usedBy > 0).length;
 
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="flex items-center gap-2 text-left"
+          className="flex min-w-0 items-center gap-2 text-left"
         >
           <span className={`text-slate-400 transition-transform ${collapsed ? "-rotate-90" : ""}`}>
             <IconChevronDown size={14} />
           </span>
-          <span className="text-sm font-semibold text-slate-900">{category}</span>
+          <span className="font-mono text-sm font-semibold text-slate-900">{category}</span>
           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
-            {keys.length} keys
+            {fields.length} fields
           </span>
+          {used > 0 && (
+            <span className="hidden rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 sm:inline">
+              {used} in use
+            </span>
+          )}
         </button>
         <button
           onClick={() => onDeleteCategory(category)}
           className="rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
-          title={`Delete the ${category} group and its keys`}
+          title={`Delete the ${category} group and its fields`}
         >
           <IconTrash size={14} />
         </button>
       </div>
       {!collapsed && (
         <div className="p-4">
-          <div className="flex flex-wrap gap-2">
-            {keys.map((k) => (
-              <span
-                key={k}
-                className="flex items-center gap-1.5 rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700"
-              >
-                {k}
-                <button
-                  onClick={() => onRemoveKey(category, k)}
-                  title={`Remove ${k}`}
-                  className="text-blue-400 transition hover:text-rose-600"
+          <div className="flex flex-wrap gap-1.5">
+            {fields.map((f) => {
+              // Three states worth telling apart: a field a format reads, a field the calls
+              // carry but nothing uses, and a field nothing has carried lately.
+              const tone =
+                f.usedBy > 0
+                  ? "border-indigo-200 bg-indigo-50 text-indigo-800"
+                  : f.coverage === null || f.coverage > 0
+                    ? "border-slate-200 bg-white text-slate-600"
+                    : "border-amber-200 bg-amber-50 text-amber-800";
+              const note =
+                f.coverage === null
+                  ? f.path
+                  : `${f.path} — in ${f.coverage}% of the last ${sampled} calls` +
+                    (f.usedBy > 0 ? `, read by ${f.usedBy} format${f.usedBy === 1 ? "" : "s"}` : "");
+              return (
+                <span
+                  key={f.key}
+                  title={note}
+                  className={`inline-flex items-center gap-1.5 rounded-lg border py-1 pl-2.5 pr-1 font-mono text-xs ${tone}`}
                 >
-                  <IconX size={11} />
-                </button>
-              </span>
-            ))}
-            {keys.length === 0 && <p className="text-xs text-slate-400">No keys yet.</p>}
+                  {f.key}
+                  {f.coverage !== null && (
+                    <span className="rounded bg-white/70 px-1 text-[10px] font-sans text-slate-500">
+                      {f.coverage}%
+                    </span>
+                  )}
+                  <button
+                    onClick={() => onRemoveKey(category, f.key)}
+                    title={`Remove ${f.key}`}
+                    className="rounded p-0.5 text-current opacity-40 transition hover:bg-white hover:text-rose-600 hover:opacity-100"
+                  >
+                    <IconX size={11} />
+                  </button>
+                </span>
+              );
+            })}
+            {fields.length === 0 && <p className="text-xs text-slate-400">No fields here yet.</p>}
           </div>
           <button
             onClick={() => onAddKey(category)}
-            className="mt-3 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
           >
-            Add Key
+            <IconPlus size={12} />
+            Add a field
           </button>
         </div>
       )}
@@ -1061,15 +1101,68 @@ function CategoryCard({
 
 function MappingKeysTab() {
   const queryClient = useQueryClient();
-  const [scan, setScan] = useState<Awaited<ReturnType<typeof discoverMappingKeys>> | null>(null);
-  const [scanning, setScanning] = useState(false);
   const [adopting, setAdopting] = useState(false);
-  const [scanNote, setScanNote] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
   const dialog = useDialog();
   const { categories, isLoading, save } = useMappingKeys();
 
+  // Read the calls rather than asking someone to press a button and read the result: the
+  // catalogue drifts both ways, and which way is the useful part.
+  const { data: scan, isFetching: scanning } = useQuery({
+    queryKey: ["mapping-keys-scan"],
+    queryFn: () => discoverMappingKeys(),
+    staleTime: 60_000,
+  });
+  const { data: formats = [] } = useQuery({
+    queryKey: ["datasheetTemplates"],
+    queryFn: listDatasheetTemplates,
+  });
+
+  const pathOf = (category: string, key: string) =>
+    category === "root" ? key : `${category}.${key}`;
+
+  // How often each field appears in recent calls...
+  const coverage = new Map<string, number>();
+  for (const c of scan?.categories ?? []) {
+    for (const k of c.keys) coverage.set(pathOf(c.category, k.key), k.coverage);
+  }
+  // ...and how many formats read from it.
+  const usedBy = new Map<string, number>();
+  for (const format of formats) {
+    for (const path of Object.values(format.update_columns_mapping ?? {})) {
+      for (const part of String(path).split("|").map((p) => p.trim())) {
+        if (part) usedBy.set(part, (usedBy.get(part) ?? 0) + 1);
+      }
+    }
+  }
+
+  const term = search.trim().toLowerCase();
+  const shown = Object.entries(categories)
+    .map(([category, keys]) => ({
+      category,
+      fields: keys
+        .filter((k) => !term || k.toLowerCase().includes(term) || category.toLowerCase().includes(term))
+        .map((key) => ({
+          key,
+          path: pathOf(category, key),
+          coverage: scan ? (coverage.get(pathOf(category, key)) ?? 0) : null,
+          usedBy: usedBy.get(pathOf(category, key)) ?? 0,
+        })),
+    }))
+    .filter((c) => !term || c.fields.length > 0);
+
+  const missing = (scan?.categories ?? []).flatMap((c) =>
+    c.new.map((key) => ({ category: c.category, key })),
+  );
+  const totalFields = Object.values(categories).reduce((n, keys) => n + keys.length, 0);
+  const inUse = Object.entries(categories).reduce(
+    (n, [category, keys]) => n + keys.filter((k) => (usedBy.get(pathOf(category, k)) ?? 0) > 0).length,
+    0,
+  );
+
   const addKey = async (category: string) => {
-    const key = (await dialog.prompt(`New key in "${category}"`, { placeholder: "ptp_date" }))?.trim();
+    const key = (await dialog.prompt(`New field in "${category}"`, { placeholder: "ptp_date" }))?.trim();
     if (!key || (categories[category] ?? []).includes(key)) return;
     save({ ...categories, [category]: [...(categories[category] ?? []), key] });
   };
@@ -1077,8 +1170,8 @@ function MappingKeysTab() {
     save({ ...categories, [category]: (categories[category] ?? []).filter((k) => k !== key) });
   };
   const deleteCategory = async (category: string) => {
-    const ok = await dialog.confirm(`Delete category "${category}"?`, {
-      body: "Every key in it goes too.",
+    const ok = await dialog.confirm(`Delete the "${category}" group?`, {
+      body: "Every field in it goes too. Formats already reading from them keep working.",
       danger: true,
     });
     if (!ok) return;
@@ -1087,140 +1180,123 @@ function MappingKeysTab() {
     save(next);
   };
   const createCategory = async () => {
-    const name = (await dialog.prompt("New category", { placeholder: "model_data" }))?.trim();
+    const name = (await dialog.prompt("New group", { placeholder: "model_data" }))?.trim();
     if (!name || categories[name]) return;
     save({ ...categories, [name]: [] });
   };
 
+  const addMissing = async () => {
+    setAdopting(true);
+    setNote(null);
+    try {
+      const res = await adoptMappingKeys();
+      const count = Object.values(res.added).reduce((n, k) => n + k.length, 0);
+      setNote(`Added ${count} field${count === 1 ? "" : "s"} the calls were already producing.`);
+      queryClient.invalidateQueries({ queryKey: ["mapping-keys"] });
+      queryClient.invalidateQueries({ queryKey: ["mapping-keys-scan"] });
+    } catch (err) {
+      setNote((err as Error).message);
+    } finally {
+      setAdopting(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-slate-500">
-          These keys power the field picker when adding a Column Mapping, grouped by where they
-          live in the session document. "root" keys map directly (e.g. <code>session_id</code>);
-          other categories are dotted paths (e.g. <code>model_data.disposition_code</code>).
-        </p>
-        <div className="flex shrink-0 gap-2">
-          {/* The catalog was kept by hand against data the system writes itself, so it
-              drifted both ways: keys every call carries were missing, and keys nothing
-              writes any more sat in the list. Reading the calls answers it. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm text-slate-600">
+            Everything a call leaves behind, which is what a list format can write into a
+            client's sheet.
+          </p>
+          <p className="mt-0.5 text-xs text-slate-400">
+            {totalFields} fields · {inUse} read by a format
+            {scan ? ` · measured against the last ${scan.sampled} calls` : ""}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search fields"
+            className="h-9 w-44 rounded-lg border border-slate-300 px-2.5 text-sm"
+          />
           <button
-            onClick={async () => {
-              setScanning(true);
-              setScanNote(null);
-              try {
-                setScan(await discoverMappingKeys());
-              } catch (err) {
-                setScanNote((err as Error).message);
-              } finally {
-                setScanning(false);
-              }
-            }}
+            onClick={() => queryClient.invalidateQueries({ queryKey: ["mapping-keys-scan"] })}
             disabled={scanning}
             className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-40"
           >
-            {scanning ? "Scanning…" : "Scan calls"}
+            {scanning ? "Reading calls…" : "Re-read calls"}
           </button>
           <button
             onClick={createCategory}
             className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
           >
-            Create Category
+            New group
           </button>
         </div>
       </div>
 
-      {scan && (
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold text-slate-900">
-              Found in {scan.sampled} recent calls
-            </h3>
-            {scan.categories.some((c) => c.new.length > 0) && (
-              <button
-                onClick={async () => {
-                  setAdopting(true);
-                  try {
-                    const res = await adoptMappingKeys();
-                    const count = Object.values(res.added).reduce((n, k) => n + k.length, 0);
-                    setScanNote(`Added ${count} key${count === 1 ? "" : "s"} to the catalog.`);
-                    setScan(await discoverMappingKeys());
-                    queryClient.invalidateQueries({ queryKey: ["mapping-keys"] });
-                  } catch (err) {
-                    setScanNote((err as Error).message);
-                  } finally {
-                    setAdopting(false);
-                  }
-                }}
-                disabled={adopting}
-                className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-indigo-700 disabled:opacity-40"
-              >
-                {adopting ? "Adding…" : "Add all missing keys"}
-              </button>
-            )}
-          </div>
-          {scanNote && <p className="mt-2 text-xs text-slate-500">{scanNote}</p>}
+      <div className="flex flex-wrap items-center gap-4 rounded-lg border border-slate-200 bg-white px-4 py-2 text-[11px] text-slate-500">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-sm border border-indigo-200 bg-indigo-50" />
+          read by a format
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-sm border border-slate-200 bg-white" />
+          produced by calls, nothing reads it yet
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-sm border border-amber-200 bg-amber-50" />
+          not seen in recent calls
+        </span>
+      </div>
 
-          <div className="mt-3 space-y-4">
-            {scan.categories.map((c) => (
-              <div key={c.category}>
-                <div className="flex items-baseline gap-2">
-                  <span className="font-mono text-xs font-semibold text-slate-700">
-                    {c.category}
-                  </span>
-                  <span className="text-[11px] text-slate-400">
-                    {c.keys.length} seen · {c.new.length} not in the catalog
-                  </span>
-                </div>
-                <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  {c.keys.map((k) => (
-                    <span
-                      key={k.key}
-                      title={`${k.calls} of ${scan.sampled} calls carry this`}
-                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[10px] ${
-                        k.listed
-                          ? "bg-slate-100 text-slate-500"
-                          : "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
-                      }`}
-                    >
-                      {k.key}
-                      <span className={k.listed ? "text-slate-400" : "text-emerald-500"}>
-                        {k.coverage}%
-                      </span>
-                    </span>
-                  ))}
-                </div>
-                {c.listed_but_unseen.length > 0 && (
-                  <p className="mt-1.5 text-[11px] text-amber-700">
-                    Listed but never seen: {c.listed_but_unseen.join(", ")}
-                  </p>
-                )}
-              </div>
-            ))}
-          </div>
+      {missing.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-2.5">
+          <p className="min-w-0 text-xs text-amber-900">
+            <strong>{missing.length}</strong> field{missing.length === 1 ? "" : "s"} recent calls
+            carry {missing.length === 1 ? "is" : "are"} not listed yet:{" "}
+            <span className="font-mono">
+              {missing.slice(0, 4).map((m) => pathOf(m.category, m.key)).join(", ")}
+            </span>
+            {missing.length > 4 && ` +${missing.length - 4} more`}
+          </p>
+          <button
+            onClick={addMissing}
+            disabled={adopting}
+            className="shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-medium text-amber-900 transition hover:bg-amber-100 disabled:opacity-40"
+          >
+            {adopting ? "Adding…" : "Add them"}
+          </button>
         </div>
       )}
 
-      {isLoading && <p className="text-sm text-slate-500">Loading...</p>}
+      {note && <p className="text-xs text-slate-500">{note}</p>}
+      {isLoading && <p className="text-sm text-slate-500">Loading…</p>}
 
       <div className="space-y-4">
-        {Object.entries(categories).map(([category, keys]) => (
+        {shown.map((c) => (
           <CategoryCard
-            key={category}
-            category={category}
-            keys={keys}
+            key={c.category}
+            category={c.category}
+            fields={c.fields}
+            sampled={scan?.sampled ?? 0}
             onAddKey={addKey}
             onRemoveKey={removeKey}
             onDeleteCategory={deleteCategory}
           />
         ))}
-        {!isLoading && Object.keys(categories).length === 0 && (
-          <p className="text-sm text-slate-400">No categories yet.</p>
+        {!isLoading && shown.length === 0 && (
+          <p className="text-sm text-slate-400">
+            {term ? `Nothing matches "${search}".` : "No groups yet."}
+          </p>
         )}
       </div>
     </div>
   );
 }
+
 
 function TemplatesTab({ availablePaths }: { availablePaths: string[] }) {
   const dialog = useDialog();
