@@ -1152,7 +1152,7 @@ function MappingKeysTab() {
 
   // Read the calls rather than asking someone to press a button and read the result: the
   // catalogue drifts both ways, and which way is the useful part.
-  const { data: scan, isFetching: scanning } = useQuery({
+  const { data: scan } = useQuery({
     queryKey: ["mapping-keys-scan"],
     queryFn: () => discoverMappingKeys(),
     staleTime: 60_000,
@@ -1245,13 +1245,6 @@ function MappingKeysTab() {
             placeholder="Search fields"
             className="h-9 w-44 rounded-lg border border-slate-300 px-2.5 text-sm"
           />
-          <button
-            onClick={() => queryClient.invalidateQueries({ queryKey: ["mapping-keys-scan"] })}
-            disabled={scanning}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-40"
-          >
-            {scanning ? "Reading calls…" : "Re-read calls"}
-          </button>
           <button
             onClick={createCategory}
             className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"

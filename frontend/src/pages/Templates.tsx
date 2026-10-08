@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createTemplate,
+  createVoiceProfile,
   listDatasheets,
   listSupportedLanguages,
   listTemplates,
@@ -55,38 +56,67 @@ const LANGUAGE_TABS = [
   { key: "analysis_prompt", label: "Analysis Prompt", multiline: true, hint: "Post-call prompt that returns JSON into model_data. Use {conversation_text}." },
 ] as const;
 
-/**
- * The per-language technical settings.
- *
- * The voice id is deliberately not here. It used to be, and the matrix at the bottom of
- * the page edited the same field for every use case and language at once - two editors
- * for one value, each with its own draft and its own Save, so whichever was saved second
- * silently overwrote the first. The matrix keeps it: seeing every voice together is the
- * reason that view exists, and it can fill a whole row at once.
- */
-const VOICE_FIELDS = [
-  { key: "stt_lan_code", label: "Recognition language code", placeholder: "hi" },
-  { key: "tts_lan_code", label: "Speech language code", placeholder: "hi" },
-  { key: "tts_model_id", label: "Voice model", placeholder: "Default model" },
-] as const;
-
 function LanguageEditor({
   config,
   onSave,
   voiceProfiles,
+  languageKey,
+  languageLabel,
 }: {
   config: LanguageConfig;
   onSave: (next: LanguageConfig) => void;
   voiceProfiles: VoiceProfile[];
+  languageKey: string;
+  languageLabel: string;
 }) {
+  const queryClient = useQueryClient();
   const [draft, setDraft] = useState<LanguageConfig>(config);
   const [tab, setTab] = useState<string>("prompt");
   const chosenProfile = voiceProfiles.find((p) => p._id === draft.voice_profile_id);
+  // Profiles made for this language first: the list grows with every client.
+  const offered = [...voiceProfiles].sort(
+    (a, b) =>
+      Number((b.language ?? "") === languageKey) - Number((a.language ?? "") === languageKey) ||
+      a.name.localeCompare(b.name),
+  );
+  // Codes left on the script itself, from before profiles existed.
+  const strayCodes =
+    !chosenProfile &&
+    [config.stt_lan_code, config.tts_lan_code, config.tts_model_id, config.tts_voice_id].some(
+      (v) => (v ?? "").trim(),
+    );
 
   useEffect(() => setDraft(config), [config]);
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(config);
   const set = (k: keyof LanguageConfig, v: string) => setDraft({ ...draft, [k]: v });
+
+  // Lift those codes into a profile rather than making someone retype them there.
+  const adopt = useMutation({
+    mutationFn: async () => {
+      const { voice_profile_id } = await createVoiceProfile({
+        name: `${languageLabel} voice`,
+        language: languageKey,
+        stt_language: config.stt_lan_code ?? "",
+        tts_language: config.tts_lan_code ?? "",
+        tts_model_id: config.tts_model_id ?? "",
+        tts_voice_id: config.tts_voice_id ?? "",
+        description: "Taken from a script that carried its own codes.",
+      });
+      return voice_profile_id;
+    },
+    onSuccess: (id) => {
+      queryClient.invalidateQueries({ queryKey: ["voiceProfiles"] });
+      onSave({
+        ...draft,
+        voice_profile_id: id,
+        stt_lan_code: "",
+        tts_lan_code: "",
+        tts_model_id: "",
+        tts_voice_id: "",
+      });
+    },
+  });
 
   return (
     <div className="space-y-4">
@@ -113,7 +143,7 @@ function LanguageEditor({
             tab === "voice" ? "border-b-2 border-indigo-600 text-indigo-700" : "text-slate-500 hover:text-slate-700"
           }`}
         >
-          Voice &amp; Codes
+          Voice
         </button>
       </div>
 
@@ -132,17 +162,18 @@ function LanguageEditor({
 
       {tab === "voice" && (
         <div className="space-y-4">
-          {/* One choice instead of four fields. The codes and the voice live on the
-              profile, in Voice profiles; this script simply names one. */}
+          {/* One choice, nothing to type. The codes and the voice itself live on the
+              profile, in Configuration; a script only names one, and every script naming
+              it follows when it changes. */}
           <label className="block text-xs font-medium text-slate-600">
             Voice profile
             <select
               value={draft.voice_profile_id ?? ""}
               onChange={(e) => set("voice_profile_id" as keyof LanguageConfig, e.target.value)}
-              className="mt-1 h-9 w-full max-w-md rounded-lg border border-slate-300 px-2.5 text-sm"
+              className="mt-1 h-10 w-full max-w-md rounded-lg border border-slate-300 px-2.5 text-sm"
             >
-              <option value="">Use the codes set below</option>
-              {voiceProfiles.map((p) => (
+              <option value="">Default voice — set in Configuration</option>
+              {offered.map((p) => (
                 <option key={p._id} value={p._id}>
                   {p.name}
                   {p.language ? ` · ${p.language}` : ""}
@@ -163,37 +194,36 @@ function LanguageEditor({
                 </span>
               </div>
               <p className="mt-2 text-[11px] text-emerald-800/70">
-                Change any of these in Voice profiles and every script using it follows.
+                Edit it in Configuration → Voice Profiles and every script using it follows.
               </p>
             </div>
-          ) : (
-            <details className="max-w-xl rounded-lg border border-slate-200 p-3">
-              <summary className="cursor-pointer text-xs font-medium text-slate-600">
-                Codes for this language
-              </summary>
-              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {VOICE_FIELDS.map((f) => (
-                  <label key={f.key} className="block text-xs font-medium text-slate-600">
-                    {f.label}
-                    <input
-                      value={(draft[f.key as keyof LanguageConfig] as string) ?? ""}
-                      onChange={(e) => set(f.key as keyof LanguageConfig, e.target.value)}
-                      placeholder={f.placeholder}
-                      className="mt-1 h-9 w-full rounded-lg border border-slate-300 px-2.5 text-sm transition focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-                    />
-                  </label>
-                ))}
-                <label className="block text-xs font-medium text-slate-600 sm:col-span-2">
-                  Voice
-                  <input
-                    value={draft.tts_voice_id ?? ""}
-                    onChange={(e) => set("tts_voice_id" as keyof LanguageConfig, e.target.value)}
-                    placeholder="default voice from Settings"
-                    className="mt-1 h-9 w-full rounded-lg border border-slate-300 px-2.5 font-mono text-xs"
-                  />
-                </label>
+          ) : strayCodes ? (
+            /* Scripts saved before profiles existed still carry their own codes. Showing
+               them as fields again is what we just stopped doing, so the only thing on
+               offer is to turn them into a profile. */
+            <div className="flex max-w-xl flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-900">
+              <div className="min-w-0">
+                <div className="font-medium">This language still has codes of its own</div>
+                <div className="mt-0.5 font-mono text-[11px] text-amber-800/80">
+                  {[draft.stt_lan_code, draft.tts_lan_code, draft.tts_model_id]
+                    .filter(Boolean)
+                    .join(" · ") || "voice only"}
+                </div>
               </div>
-            </details>
+              <button
+                onClick={() => adopt.mutate()}
+                disabled={adopt.isPending}
+                className="shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1.5 font-medium text-amber-900 transition hover:bg-amber-100 disabled:opacity-40"
+              >
+                {adopt.isPending ? "Saving…" : "Make it a profile"}
+              </button>
+            </div>
+          ) : (
+            <p className="max-w-md text-xs text-slate-500">
+              {voiceProfiles.length === 0
+                ? "No voice profiles yet — add one in Configuration → Voice Profiles."
+                : "No profile named, so this language speaks with the default voice."}
+            </p>
           )}
         </div>
       )}
@@ -607,6 +637,8 @@ export function Templates() {
                     config={activeUseCase.languages[languageKey]}
                     onSave={saveLanguage}
                     voiceProfiles={voiceProfiles}
+                    languageKey={languageKey}
+                    languageLabel={labelFor(languageKey)}
                   />
                 </>
               ) : (
