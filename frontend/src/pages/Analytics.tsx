@@ -63,6 +63,11 @@ export function Analytics() {
   // period would leave the column short of 100 whenever some calls were never scored.
   const outcomeTotal = outcomeRows.reduce((s, d) => s + d.count, 0);
   const outcomeShares = sharesOf(outcomeRows.map((d) => d.count));
+  const hours = summary?.by_hour ?? [];
+  const busiestHour = Math.max(1, ...hours.map((h) => h.calls));
+  const attempts = summary?.by_attempt ?? [];
+  const callingHours = summary?.calling_hours ?? [];
+  const outsideHours = summary?.outside_calling_hours ?? 0;
   const languages = summary?.by_language ?? [];
   const languageTotal = languages.reduce((s, l) => s + l.count, 0);
   const languageShares = sharesOf(languages.map((l) => l.count));
@@ -207,6 +212,94 @@ export function Analytics() {
             )}
             {!isLoading && outcomeRows.length === 0 && (
               <p className="text-xs text-slate-400">Nothing scored in this period.</p>
+            )}
+          </div>
+        </div>
+
+        {/* The two questions a desk asks every week and had to guess at: when is it worth
+            ringing, and is a fourth attempt worth placing. Both are read off the calls. */}
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
+          <h2 className="text-sm font-semibold text-slate-900">When calls connect</h2>
+          <p className="mt-0.5 text-xs text-slate-500">
+            By hour of the Indian day. The darker part of each bar reached someone.
+            {callingHours.length === 2 && (
+              <> Calls are meant to go out between {callingHours[0]}:00 and {callingHours[1]}:00.</>
+            )}
+          </p>
+          {hours.length === 0 ? (
+            <p className="mt-4 text-xs text-slate-400">No calls in this period.</p>
+          ) : (
+            <div className="mt-4 flex h-36 items-end gap-1 overflow-x-auto">
+              {hours.map((h) => {
+                const height = (h.calls / busiestHour) * 100;
+                const share = h.calls ? (h.answered / h.calls) * 100 : 0;
+                const inWindow =
+                  callingHours.length !== 2 ||
+                  (h.hour >= callingHours[0] && h.hour < callingHours[1]);
+                return (
+                  <div
+                    key={h.hour}
+                    className="flex h-full min-w-[30px] flex-1 flex-col items-center gap-1"
+                    title={`${h.hour}:00 — ${h.calls} calls, ${h.answered} reached someone${
+                      inWindow ? "" : " (outside calling hours)"
+                    }`}
+                  >
+                    <span className="text-[9px] text-slate-400">{Math.round(share)}%</span>
+                    <div className="flex w-full flex-1 flex-col justify-end">
+                      <div
+                        className={`relative flex w-full flex-col justify-end overflow-hidden rounded-t ${
+                          inWindow ? "bg-indigo-200" : "bg-amber-200"
+                        }`}
+                        style={{ height: `${Math.max(height, 4)}%` }}
+                      >
+                        <div
+                          className={`w-full ${inWindow ? "bg-indigo-600" : "bg-amber-500"}`}
+                          style={{ height: `${share}%` }}
+                        />
+                      </div>
+                    </div>
+                    <span className="text-[9px] text-slate-400">{h.hour}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {outsideHours > 0 && (
+            <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <strong>{outsideHours}</strong> of {summary?.total ?? 0} calls went out outside{" "}
+              {callingHours[0]}:00–{callingHours[1]}:00 (shown in amber). Collection calls are
+              only allowed until 19:00.
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-slate-900">Is another try worth it?</h2>
+          <p className="mt-0.5 text-xs text-slate-500">
+            What each attempt returned, so a retry policy is a decision rather than a guess.
+          </p>
+          <div className="mt-4 space-y-2">
+            {attempts.map((a) => (
+              <div key={a.attempt} className="flex items-center gap-3 text-xs">
+                <span className="w-16 shrink-0 font-medium text-slate-700">
+                  Attempt {a.attempt}
+                </span>
+                <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-emerald-500"
+                    style={{ width: `${a.calls ? (a.promises / a.calls) * 100 : 0}%` }}
+                  />
+                </div>
+                <span className="w-28 shrink-0 text-right tabular-nums text-slate-600">
+                  {a.promises}/{a.calls} promised
+                </span>
+              </div>
+            ))}
+            {attempts.length === 0 && (
+              <p className="text-xs text-slate-400">
+                No attempt-numbered calls yet. Runs placed from now on record which try they
+                are, and this fills in.
+              </p>
             )}
           </div>
         </div>

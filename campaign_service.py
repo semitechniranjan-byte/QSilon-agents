@@ -479,6 +479,9 @@ async def _run_one_row(
                         campaign_id=campaign_id,
                         datasheet_id=datasheet_id,
                         row_index=row_index,
+                        # Which try this is. Without it a report cannot say whether a
+                        # promise came on the first call or the fourth.
+                        attempt_no=attempt_no,
                         language=cfg.get("language"),
                         use_case=cfg.get("use_case"),
                         agent_id=agent_id,

@@ -819,18 +819,20 @@ async def _carry_row_link(previous: dict, new_session_id: Optional[str]) -> None
         return
     try:
         row_index = int(row_index)
+        row = await handler.db.get_datasheet_row(datasheet_id, row_index) or {}
+        attempt_no = int(row.get("attempt_count") or 0) + 1
         await handler.db.update_session(
             new_session_id,
             datasheet_id=datasheet_id,
             row_index=row_index,
             campaign_id=previous.get("campaign_id"),
+            attempt_no=attempt_no,
         )
-        row = await handler.db.get_datasheet_row(datasheet_id, row_index) or {}
         await handler.db.update_datasheet_row(
             datasheet_id,
             row_index,
             session_id=new_session_id,
-            attempt_count=int(row.get("attempt_count") or 0) + 1,
+            attempt_count=attempt_no,
             last_attempt_at=datetime.utcnow(),
             status="calling",
         )
@@ -2101,13 +2103,18 @@ REPORT_COLUMNS = [
     ("Phone", lambda s, m, n: s.get("phone_number") or ""),
     ("Direction", lambda s, m, n: s.get("direction") or ""),
     ("Status", lambda s, m, n: s.get("status") or ""),
+    # "completed" is the carrier's word for a call nobody picked up, so the one thing a
+    # desk sorts by was missing from its own report.
+    ("Connected", lambda s, m, n: result_columns.connected_label(s)),
     ("Outcome", lambda s, m, n: s.get("disposition_code") or ""),
     ("Promise date", lambda s, m, n: _clean(m.get("ptp_date") or m.get("commitment_date"))),
     ("Promise time", lambda s, m, n: _clean(m.get("ptp_time"))),
     ("Promise amount", lambda s, m, n: _clean(m.get("ptp_amt"))),
     ("Cooperation", lambda s, m, n: _clean(m.get("user_cooperation_level"))),
     ("Interruptions", lambda s, m, n: m.get("interruption_count", s.get("interruption_count", 0))),
-    ("Attempts", lambda s, m, n: s.get("attempt_count") or 1),
+    # Which attempt this call was. It used to read s["attempt_count"], which no session has
+    # ever carried, so every row of every client report said 1.
+    ("Attempt", lambda s, m, n: s.get("attempt_no") or s.get("attempt_count") or 1),
     ("Turns", lambda s, m, n: n),
     ("Duration (s)", lambda s, m, n: _duration_seconds(s)),
     ("Language", lambda s, m, n: s.get("language") or _clean(m.get("language_detected"))),
@@ -2434,10 +2441,63 @@ async def analytics_summary(
         {"$sort": {"count": -1}},
     ]).to_list(20)
 
+    # ---- When calls connect, and which attempt does it ---------------------------------
+    # Both are read off the calls themselves: a desk picks its calling window and its retry
+    # policy from these two numbers, and until now it had to guess at both.
+    unreached = ["NR", "RNR", "ICR", "LM", "NO_ANSWER"]
+    hours = await sessions.aggregate([
+        {"$match": {**window, "created_at": {"$ne": None}}},
+        {"$group": {
+            # Stored in UTC; a calling window is a local thing.
+            "_id": {"$hour": {"date": "$created_at", "timezone": "Asia/Kolkata"}},
+            "calls": {"$sum": 1},
+            "answered": {
+                "$sum": {"$cond": [{"$in": [{"$toUpper": {"$ifNull": ["$disposition_code", ""]}}, unreached]}, 0, 1]}
+            },
+        }},
+        {"$sort": {"_id": 1}},
+    ]).to_list(24)
+
+    attempts = await sessions.aggregate([
+        {"$match": {**window, "attempt_no": {"$ne": None}}},
+        {"$group": {
+            "_id": "$attempt_no",
+            "calls": {"$sum": 1},
+            "promises": {
+                "$sum": {"$cond": [{"$in": ["$disposition_code", ["PTP", "FPTP"]]}, 1, 0]}
+            },
+            "answered": {
+                "$sum": {"$cond": [{"$in": [{"$toUpper": {"$ifNull": ["$disposition_code", ""]}}, unreached]}, 0, 1]}
+            },
+        }},
+        {"$sort": {"_id": 1}},
+    ]).to_list(20)
+
+    app_settings = await handler.db.get_app_settings()
+    open_hour, close_hour = campaign_service._calling_window(app_settings)
+    outside = sum(
+        row["calls"] for row in hours if not (open_hour <= int(row["_id"]) < close_hour)
+    )
+
     promises = sum(d["count"] for d in by_disposition if d["_id"] in ("PTP", "FPTP"))
     return {
         "total": total,
         "scored": scored,
+        "by_hour": [
+            {"hour": int(h["_id"]), "calls": h["calls"], "answered": h["answered"]}
+            for h in hours
+        ],
+        "by_attempt": [
+            {
+                "attempt": int(a["_id"]),
+                "calls": a["calls"],
+                "answered": a["answered"],
+                "promises": a["promises"],
+            }
+            for a in attempts
+        ],
+        "calling_hours": [open_hour, close_hour],
+        "outside_calling_hours": outside,
         "promises": promises,
         "promise_rate": round(promises / scored * 100, 1) if scored else 0.0,
         "by_disposition": [{"code": d["_id"], "count": d["count"]} for d in by_disposition],

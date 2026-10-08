@@ -386,6 +386,13 @@ export interface AnalyticsSummary {
   by_disposition: { code: string; count: number }[];
   by_day: { date: string; calls: number; promises: number; refused?: number; paid?: number }[];
   by_language: { language: string; count: number }[];
+  /** Calls per hour of the Indian day, and how many of them reached someone. */
+  by_hour: { hour: number; calls: number; answered: number }[];
+  /** How a first try compares with a fourth. Empty until runs record attempt numbers. */
+  by_attempt: { attempt: number; calls: number; answered: number; promises: number }[];
+  /** The window calls are meant to go out in, and how many went out outside it. */
+  calling_hours: number[];
+  outside_calling_hours: number;
 }
 
 export type ReportFilters = {
