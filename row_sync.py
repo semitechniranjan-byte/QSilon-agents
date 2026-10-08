@@ -20,8 +20,10 @@ from bson import ObjectId
 
 try:
     from .template_service import apply_update_columns_mapping, attempt_history_updates
+    from .result_columns import connected_label
 except ImportError:  # pragma: no cover
     from template_service import apply_update_columns_mapping, attempt_history_updates
+    from result_columns import connected_label
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,10 @@ async def sync_row_from_session(db, session_id: Optional[str]) -> bool:
         # The attempt this row is on. The counter is moved when the call is placed, so this
         # fills the attempt that just happened rather than inventing a new one.
         attempt_no = max(1, int(row.get("attempt_count") or 1))
+        # "Connected or not" is the first thing a desk reads, and no provider writes it:
+        # the carrier says "completed" for a call nobody picked up. Worked out here so a
+        # format can simply map it like any other field.
+        session = {**session, "connected": connected_label(session)}
         writes = apply_update_columns_mapping(session, mapping)
         if not writes:
             return False

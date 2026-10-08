@@ -585,6 +585,20 @@ export interface DatasheetField {
   values: { value: string; count: number }[];
 }
 
+/** One of the results almost every client reads, and where it is found. */
+export interface StandardResultColumn {
+  column: string;
+  label: string;
+  path: string;
+  per_attempt: boolean;
+  group: "call" | "outcome" | "run";
+}
+
+export const getStandardResultColumns = () =>
+  api
+    .get<{ columns: StandardResultColumn[] }>("/result-columns/standard")
+    .then((r) => r.data.columns);
+
 export const getDatasheetFields = (datasheetId: string) =>
   api
     .get<{ rows: number; fields: DatasheetField[] }>(`/datasheets/${datasheetId}/fields`)

@@ -32,6 +32,7 @@ try:
     from . import call_registry
     from . import row_filter
     from . import row_sync
+    from . import result_columns
 except ImportError:  # pragma: no cover
     from analyze_sessions import router as analyze_sessions_router, init_analyze_sessions
     from call_handler import CallHandler, LLM_HEDGE_AFTER_SECONDS
@@ -44,6 +45,7 @@ except ImportError:  # pragma: no cover
     import call_registry
     import row_filter
     import row_sync
+    import result_columns
 
 app = FastAPI(title="Minimal Voice Clone API")
 # When the built frontend is served by this same app the origin matches and CORS is moot,
@@ -2766,12 +2768,14 @@ async def list_supported_languages() -> dict:
     }
 
 
-#: Result columns worth keeping per attempt when a format is made automatically. Only the
-#: ones the calls actually fill in are used; the rest are dropped.
-AUTO_ATTEMPT_COLUMNS = (
-    "DIALED_DATETIME", "CUSTOMER_START_TIME", "CUSTOMER_END_TIME",
-    "BOT/IVR_STATUS", "DISPOSITION", "DURATION", "EXECUTION_ID",
-)
+@app.get("/result-columns/standard")
+async def standard_result_columns() -> dict:
+    """The short set of results almost every client reads, in the order they read them.
+
+    A format can map any of thirty-odd fields a call produces; nobody can check a list
+    that long before a run. This is the set the console leads with.
+    """
+    return {"columns": result_columns.STANDARD_RESULT_COLUMNS}
 
 
 async def _matching_format(columns: list) -> Optional[dict]:
@@ -2827,16 +2831,15 @@ async def upload_datasheet(
             plan = await _plan_format(
                 columns, len(rows), use_case=use_case, language=language
             )
-            mapping = plan["update_columns_mapping"]
+            # The standard set first - when we rang, whether it connected, how long, what
+            # it came to - then anything else this deployment's calls produce.
+            mapping = {**result_columns.standard_mapping(), **plan["update_columns_mapping"]}
             new_id = await handler.db.create_datasheet_template({
                 "name": f"{name} format",
                 "required_columns": plan["required_columns"],
                 "required_columns_mapping": {},
                 "update_columns_mapping": mapping,
-                # Only the result columns this deployment actually fills in are kept per
-                # attempt; promising a column the calls never write is worse than not
-                # offering it.
-                "attempt_columns": [c for c in AUTO_ATTEMPT_COLUMNS if c in mapping],
+                "attempt_columns": result_columns.standard_attempt_columns(),
             })
             datasheet_template = await handler.db.get_datasheet_template(new_id)
             created_format = True

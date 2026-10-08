@@ -86,8 +86,16 @@ async def main():
     print("        per attempt:", made["attempt_columns"])
     assert result["format_created"] is True
     assert made["required_columns"] == ["CUSTOMER_NAME", "MOBILE_NO", "FINAL_EMI_AMT"]
-    assert made["attempt_columns"] == ["DISPOSITION", "DURATION"], \
-        "only result columns the calls fill are kept per attempt"
+    # The standard set a desk reads comes first, and what the planner found is merged on
+    # top - so a brand new format already writes the useful answers back.
+    import result_columns
+
+    for entry in result_columns.STANDARD_RESULT_COLUMNS:
+        assert entry["column"] in made["update_columns_mapping"], entry["column"]
+    assert made["update_columns_mapping"]["PTP_AMT"] == "model_data.ptp_amt", \
+        "the planner's own finding wins over the standard path when they differ"
+    assert made["attempt_columns"] == result_columns.standard_attempt_columns()
+    assert "DISPOSITION" in made["attempt_columns"] and "SUMMARY" not in made["attempt_columns"]
     assert result["placeholders_missing"] == ["EMI_DATE"]
 
     # --- a format chosen by hand is still checked ---------------------------------------

@@ -7,6 +7,8 @@ import {
   deleteDatasheet,
   deleteDatasheetTemplate,
   downloadDatasheetCsv,
+  getStandardResultColumns,
+  type StandardResultColumn,
   adoptMappingKeys,
   discoverMappingKeys,
   getMappingKeys,
@@ -562,8 +564,49 @@ function ColumnMappingsCard({
         : [...attempt, col],
     });
 
+  // The short set almost every client reads. Thirty-five equal rows is not a list anyone
+  // can check before a run; these lead, and whatever else a deployment maps follows.
+  const { data: standard = [] } = useQuery({
+    queryKey: ["standardResultColumns"],
+    queryFn: getStandardResultColumns,
+  });
+  const standardNames = new Set(standard.map((s) => s.column));
+  const mapped = template.update_columns_mapping;
+
+  const toggleStandard = (entry: StandardResultColumn) => {
+    const next = { ...mapped };
+    if (next[entry.column]) {
+      delete next[entry.column];
+      save({
+        update_columns_mapping: next,
+        attempt_columns: attempt.filter((c) => c !== entry.column),
+      });
+      return;
+    }
+    next[entry.column] = entry.path;
+    save({
+      update_columns_mapping: next,
+      attempt_columns: entry.per_attempt && !attempt.includes(entry.column)
+        ? [...attempt, entry.column]
+        : attempt,
+    });
+  };
+
+  const useWholeStandardSet = () =>
+    save({
+      update_columns_mapping: {
+        ...Object.fromEntries(standard.map((s) => [s.column, s.path])),
+        ...mapped,
+      },
+      attempt_columns: Array.from(
+        new Set([...attempt, ...standard.filter((s) => s.per_attempt).map((s) => s.column)]),
+      ),
+    });
+
   const [filter, setFilter] = useState("");
-  const shown = Object.entries(template.update_columns_mapping).filter(
+  const [showExtras, setShowExtras] = useState(false);
+  const extras = Object.entries(mapped).filter(([col]) => !standardNames.has(col));
+  const shown = extras.filter(
     ([col, path]) =>
       col.toLowerCase().includes(filter.trim().toLowerCase()) ||
       String(path).toLowerCase().includes(filter.trim().toLowerCase()),
@@ -685,21 +728,81 @@ function ColumnMappingsCard({
         </div>
       )}
 
-      {Object.keys(template.update_columns_mapping).length > 8 && (
-        <div className="border-b border-slate-100 px-3 py-2">
+      {/* The results a desk reads, in the order they read them: when we rang, whether it
+          connected, how long, what it came to, the promise. Ticking one maps it; the
+          "per attempt" toggle decides whether every attempt keeps its own copy. */}
+      <div className="divide-y divide-slate-100">
+        {standard.map((entry) => {
+          const on = Boolean(mapped[entry.column]);
+          const perAttempt = attempt.includes(entry.column);
+          return (
+            <div
+              key={entry.column}
+              className={`flex items-center gap-3 px-3 py-2 transition ${on ? "" : "opacity-60"}`}
+            >
+              <input
+                type="checkbox"
+                checked={on}
+                onChange={() => toggleStandard(entry)}
+                title={on ? `Stop writing ${entry.column}` : `Write ${entry.column} back`}
+                className="h-3.5 w-3.5 shrink-0 accent-indigo-600"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold text-slate-800">
+                  {entry.column}
+                </div>
+                <div className="truncate text-[11px] text-slate-500" title={entry.path}>
+                  {entry.label}
+                </div>
+              </div>
+              {on && (
+                <button
+                  onClick={() => toggleAttempt(entry.column)}
+                  title={
+                    perAttempt
+                      ? `Every attempt keeps its own ${entry.column} — click to keep only the latest`
+                      : `Only the latest ${entry.column} is kept — click to keep one per attempt`
+                  }
+                  className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium transition ${
+                    perAttempt
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-slate-200 text-slate-400 hover:border-emerald-200 hover:text-emerald-600"
+                  }`}
+                >
+                  per attempt
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 bg-slate-50/60 px-3 py-2">
+        <button
+          onClick={() => setShowExtras((v) => !v)}
+          className="text-xs font-medium text-slate-600 hover:underline"
+        >
+          {showExtras ? "Hide" : "Show"} other columns ({extras.length})
+        </button>
+        <button
+          onClick={useWholeStandardSet}
+          className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-slate-50"
+        >
+          Tick the whole standard set
+        </button>
+      </div>
+
+      {showExtras && extras.length > 8 && (
+        <div className="border-t border-slate-100 px-3 py-2">
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder={`Search ${Object.keys(template.update_columns_mapping).length} columns`}
+            placeholder={`Search ${extras.length} other columns`}
             className="h-8 w-full rounded-lg border border-slate-200 px-2.5 text-xs"
           />
         </div>
       )}
-      {/* One row per column: what it is called in the sheet, where its value is read from,
-          and whether every attempt keeps its own copy. The attempt toggle used to live in
-          a third column of its own, which meant scrolling two lists to answer one
-          question. */}
-      <div className="divide-y divide-slate-100">
+      <div className={showExtras ? "divide-y divide-slate-100 border-t border-slate-100" : "hidden"}>
         {shown.map(([outputCol, path]) => {
           const perAttempt = attempt.includes(outputCol);
           return (
@@ -745,13 +848,13 @@ function ColumnMappingsCard({
             </div>
           );
         })}
-        {Object.keys(template.update_columns_mapping).length === 0 && (
+        {extras.length === 0 && (
           <p className="px-3 py-4 text-xs text-slate-400">
-            Nothing is written back yet. "Suggest" reads what recent calls produce and
-            proposes the columns for you.
+            Nothing beyond the standard set. "Suggest" reads what recent calls produce and
+            proposes anything else worth keeping.
           </p>
         )}
-        {Object.keys(template.update_columns_mapping).length > 0 && shown.length === 0 && (
+        {extras.length > 0 && shown.length === 0 && (
           <p className="px-3 py-4 text-xs text-slate-400">Nothing matches "{filter}".</p>
         )}
       </div>
