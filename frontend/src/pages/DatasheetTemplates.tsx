@@ -606,7 +606,33 @@ function ColumnMappingsCard({
 
   const [filter, setFilter] = useState("");
   const [showExtras, setShowExtras] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const extras = Object.entries(mapped).filter(([col]) => !standardNames.has(col));
+
+  // A result column with the same name as one of the file's own columns writes over what
+  // the client uploaded - their MOBILE_NO replaced by ours. Worth saying out loud.
+  const uploaded = new Set(
+    template.required_columns.map((c) => c.toLowerCase().replace(/[^a-z0-9]/g, "")),
+  );
+  const overwrites = (col: string) => uploaded.has(col.toLowerCase().replace(/[^a-z0-9]/g, ""));
+
+  const toggleSelected = (col: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(col)) next.delete(col);
+      else next.add(col);
+      return next;
+    });
+
+  const removeSelected = () => {
+    const next = { ...mapped };
+    for (const col of selected) delete next[col];
+    save({
+      update_columns_mapping: next,
+      attempt_columns: attempt.filter((c) => !selected.has(c)),
+    });
+    setSelected(new Set());
+  };
   const shown = extras.filter(
     ([col, path]) =>
       col.toLowerCase().includes(filter.trim().toLowerCase()) ||
@@ -785,12 +811,23 @@ function ColumnMappingsCard({
         >
           {showExtras ? "Hide" : "Show"} other columns ({extras.length})
         </button>
-        <button
-          onClick={useWholeStandardSet}
-          className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-slate-50"
-        >
-          Tick the whole standard set
-        </button>
+        <div className="flex items-center gap-2">
+          {selected.size > 0 && (
+            <button
+              onClick={removeSelected}
+              className="inline-flex items-center gap-1.5 rounded-md border border-rose-200 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-700 transition hover:bg-rose-50"
+            >
+              <IconTrash size={11} />
+              Remove {selected.size} selected
+            </button>
+          )}
+          <button
+            onClick={useWholeStandardSet}
+            className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-slate-50"
+          >
+            Tick the whole standard set
+          </button>
+        </div>
       </div>
 
       {showExtras && extras.length > 8 && (
@@ -811,8 +848,25 @@ function ColumnMappingsCard({
               key={outputCol}
               className="flex items-center gap-2 px-3 py-2 transition hover:bg-slate-50/70"
             >
+              <input
+                type="checkbox"
+                checked={selected.has(outputCol)}
+                onChange={() => toggleSelected(outputCol)}
+                title="Select to remove"
+                className="h-3.5 w-3.5 shrink-0 accent-rose-600"
+              />
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-semibold text-slate-800">{outputCol}</div>
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate text-sm font-semibold text-slate-800">{outputCol}</span>
+                  {overwrites(outputCol) && (
+                    <span
+                      title={`Your file has its own ${outputCol}; this writes over it`}
+                      className="shrink-0 rounded bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-700"
+                    >
+                      overwrites your column
+                    </span>
+                  )}
+                </div>
                 <div className="truncate font-mono text-[11px] text-slate-500" title={path}>
                   {path}
                 </div>
