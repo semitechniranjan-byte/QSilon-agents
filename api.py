@@ -2736,23 +2736,6 @@ async def discover_mapping_keys(sample: int = 200) -> dict:
     return {"sampled": len(sessions), "categories": categories}
 
 
-@app.post("/mapping-keys/adopt", dependencies=[Depends(require_admin)])
-async def adopt_mapping_keys(sample: int = 200) -> dict:
-    """Add every key the sampled calls carry to the catalog, leaving what is there alone."""
-    discovered = await discover_mapping_keys(sample=sample)
-    categories = await handler.db.get_mapping_keys() or {}
-    added: Dict[str, List[str]] = {}
-    for entry in discovered["categories"]:
-        name = entry["category"]
-        if not entry["new"]:
-            continue
-        categories[name] = [*(categories.get(name) or []), *entry["new"]]
-        added[name] = entry["new"]
-    if added:
-        await handler.db.set_mapping_keys(categories)
-    return {"added": added, "sampled": discovered["sampled"], "categories": categories}
-
-
 @app.get("/mapping-keys")
 async def get_mapping_keys() -> dict:
     return {"categories": await handler.db.get_mapping_keys()}

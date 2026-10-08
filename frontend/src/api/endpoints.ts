@@ -294,15 +294,6 @@ export const discoverMappingKeys = (sample = 200) =>
     .then((r) => r.data);
 
 /** Add every key the sampled calls carry; leaves everything already listed alone. */
-export const adoptMappingKeys = (sample = 200) =>
-  api
-    .post<{ added: Record<string, string[]>; sampled: number }>(
-      "/mapping-keys/adopt",
-      null,
-      { params: { sample } },
-    )
-    .then((r) => r.data);
-
 export interface Suppression {
   _id?: string;
   phone_number: string;

@@ -9,7 +9,6 @@ import {
   downloadDatasheetCsv,
   getStandardResultColumns,
   type StandardResultColumn,
-  adoptMappingKeys,
   discoverMappingKeys,
   getMappingKeys,
   inspectDatasheetFile,
@@ -1143,9 +1142,6 @@ function CategoryCard({
 }
 
 function MappingKeysTab() {
-  const queryClient = useQueryClient();
-  const [adopting, setAdopting] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const dialog = useDialog();
   const { categories, isLoading, save } = useMappingKeys();
@@ -1180,9 +1176,6 @@ function MappingKeysTab() {
     }))
     .filter((c) => !term || c.fields.length > 0);
 
-  const missing = (scan?.categories ?? []).flatMap((c) =>
-    c.new.map((key) => ({ category: c.category, key })),
-  );
   const totalFields = Object.values(categories).reduce((n, keys) => n + keys.length, 0);
 
   const addKey = async (category: string) => {
@@ -1207,22 +1200,6 @@ function MappingKeysTab() {
     const name = (await dialog.prompt("New group", { placeholder: "model_data" }))?.trim();
     if (!name || categories[name]) return;
     save({ ...categories, [name]: [] });
-  };
-
-  const addMissing = async () => {
-    setAdopting(true);
-    setNote(null);
-    try {
-      const res = await adoptMappingKeys();
-      const count = Object.values(res.added).reduce((n, k) => n + k.length, 0);
-      setNote(`Added ${count} field${count === 1 ? "" : "s"} the calls were already producing.`);
-      queryClient.invalidateQueries({ queryKey: ["mapping-keys"] });
-      queryClient.invalidateQueries({ queryKey: ["mapping-keys-scan"] });
-    } catch (err) {
-      setNote((err as Error).message);
-    } finally {
-      setAdopting(false);
-    }
   };
 
   return (
@@ -1265,27 +1242,6 @@ function MappingKeysTab() {
         </span>
       </div>
 
-      {missing.length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-2.5">
-          <p className="min-w-0 text-xs text-amber-900">
-            <strong>{missing.length}</strong> field{missing.length === 1 ? "" : "s"} recent calls
-            carry {missing.length === 1 ? "is" : "are"} not listed yet:{" "}
-            <span className="font-mono">
-              {missing.slice(0, 4).map((m) => pathOf(m.category, m.key)).join(", ")}
-            </span>
-            {missing.length > 4 && ` +${missing.length - 4} more`}
-          </p>
-          <button
-            onClick={addMissing}
-            disabled={adopting}
-            className="shrink-0 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-medium text-amber-900 transition hover:bg-amber-100 disabled:opacity-40"
-          >
-            {adopting ? "Adding…" : "Add them"}
-          </button>
-        </div>
-      )}
-
-      {note && <p className="text-xs text-slate-500">{note}</p>}
       {isLoading && <p className="text-sm text-slate-500">Loading…</p>}
 
       <div className="space-y-4">
