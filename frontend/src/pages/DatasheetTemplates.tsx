@@ -995,8 +995,6 @@ type FieldChip = {
   path: string;
   /** Share of recently sampled calls that carry it, or null when nothing has been sampled. */
   coverage: number | null;
-  /** How many list formats read from it. */
-  usedBy: number;
 };
 
 function CategoryCard({
@@ -1015,7 +1013,6 @@ function CategoryCard({
   onDeleteCategory: (category: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
-  const used = fields.filter((f) => f.usedBy > 0).length;
 
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -1031,11 +1028,6 @@ function CategoryCard({
           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
             {fields.length} fields
           </span>
-          {used > 0 && (
-            <span className="hidden rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 sm:inline">
-              {used} in use
-            </span>
-          )}
         </button>
         <button
           onClick={() => onDeleteCategory(category)}
@@ -1049,19 +1041,16 @@ function CategoryCard({
         <div className="p-4">
           <div className="flex flex-wrap gap-1.5">
             {fields.map((f) => {
-              // Three states worth telling apart: a field a format reads, a field the calls
-              // carry but nothing uses, and a field nothing has carried lately.
+              // The one thing worth flagging: a field nothing has carried lately, which is
+              // usually a name that has moved on.
               const tone =
-                f.usedBy > 0
-                  ? "border-indigo-200 bg-indigo-50 text-indigo-800"
-                  : f.coverage === null || f.coverage > 0
-                    ? "border-slate-200 bg-white text-slate-600"
-                    : "border-amber-200 bg-amber-50 text-amber-800";
+                f.coverage === null || f.coverage > 0
+                  ? "border-slate-200 bg-white text-slate-600"
+                  : "border-amber-200 bg-amber-50 text-amber-800";
               const note =
                 f.coverage === null
                   ? f.path
-                  : `${f.path} — in ${f.coverage}% of the last ${sampled} calls` +
-                    (f.usedBy > 0 ? `, read by ${f.usedBy} format${f.usedBy === 1 ? "" : "s"}` : "");
+                  : `${f.path} — in ${f.coverage}% of the last ${sampled} calls`;
               return (
                 <span
                   key={f.key}
@@ -1114,27 +1103,13 @@ function MappingKeysTab() {
     queryFn: () => discoverMappingKeys(),
     staleTime: 60_000,
   });
-  const { data: formats = [] } = useQuery({
-    queryKey: ["datasheetTemplates"],
-    queryFn: listDatasheetTemplates,
-  });
-
   const pathOf = (category: string, key: string) =>
     category === "root" ? key : `${category}.${key}`;
 
-  // How often each field appears in recent calls...
+  // How often each field appears in recent calls.
   const coverage = new Map<string, number>();
   for (const c of scan?.categories ?? []) {
     for (const k of c.keys) coverage.set(pathOf(c.category, k.key), k.coverage);
-  }
-  // ...and how many formats read from it.
-  const usedBy = new Map<string, number>();
-  for (const format of formats) {
-    for (const path of Object.values(format.update_columns_mapping ?? {})) {
-      for (const part of String(path).split("|").map((p) => p.trim())) {
-        if (part) usedBy.set(part, (usedBy.get(part) ?? 0) + 1);
-      }
-    }
   }
 
   const term = search.trim().toLowerCase();
@@ -1147,7 +1122,6 @@ function MappingKeysTab() {
           key,
           path: pathOf(category, key),
           coverage: scan ? (coverage.get(pathOf(category, key)) ?? 0) : null,
-          usedBy: usedBy.get(pathOf(category, key)) ?? 0,
         })),
     }))
     .filter((c) => !term || c.fields.length > 0);
@@ -1156,10 +1130,6 @@ function MappingKeysTab() {
     c.new.map((key) => ({ category: c.category, key })),
   );
   const totalFields = Object.values(categories).reduce((n, keys) => n + keys.length, 0);
-  const inUse = Object.entries(categories).reduce(
-    (n, [category, keys]) => n + keys.filter((k) => (usedBy.get(pathOf(category, k)) ?? 0) > 0).length,
-    0,
-  );
 
   const addKey = async (category: string) => {
     const key = (await dialog.prompt(`New field in "${category}"`, { placeholder: "ptp_date" }))?.trim();
@@ -1210,7 +1180,7 @@ function MappingKeysTab() {
             client's sheet.
           </p>
           <p className="mt-0.5 text-xs text-slate-400">
-            {totalFields} fields · {inUse} read by a format
+            {totalFields} fields
             {scan ? ` · measured against the last ${scan.sampled} calls` : ""}
           </p>
         </div>
@@ -1239,12 +1209,8 @@ function MappingKeysTab() {
 
       <div className="flex flex-wrap items-center gap-4 rounded-lg border border-slate-200 bg-white px-4 py-2 text-[11px] text-slate-500">
         <span className="inline-flex items-center gap-1.5">
-          <span className="h-2.5 w-2.5 rounded-sm border border-indigo-200 bg-indigo-50" />
-          read by a format
-        </span>
-        <span className="inline-flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-sm border border-slate-200 bg-white" />
-          produced by calls, nothing reads it yet
+          produced by recent calls — the percentage is how often
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-sm border border-amber-200 bg-amber-50" />
