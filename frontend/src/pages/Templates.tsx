@@ -2,21 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createTemplate,
-  createVoiceProfile,
-  deleteVoiceProfile,
   listDatasheets,
   listSupportedLanguages,
   listTemplates,
   listVoiceProfiles,
   updateTemplate,
-  updateVoiceProfile,
   type VoiceProfile,
-  type VoiceProfileInput,
 } from "../api/endpoints";
 import type { LanguageConfig, Template, UseCase } from "../api/types";
 import { getApiUrl } from "../api/client";
 import { useDialog } from "../components/Dialog";
-import { IconPencil, IconTrash, IconX } from "../components/Icons";
+import { IconTrash, IconX } from "../components/Icons";
 
 function useSingleTemplate() {
   const queryClient = useQueryClient();
@@ -211,189 +207,6 @@ function LanguageEditor({
           Save language
         </button>
         {dirty && <span className="text-xs text-amber-600">Unsaved changes</span>}
-      </div>
-    </div>
-  );
-}
-
-const EMPTY_PROFILE: VoiceProfileInput = {
-  name: "",
-  language: "",
-  stt_language: "",
-  tts_language: "",
-  tts_model_id: "sonic-3",
-  tts_voice_id: "",
-  description: "",
-};
-
-/**
- * The voices, set once.
- *
- * A voice and its two language codes used to be typed into every use case and every
- * language, in two editors that wrote the same fields - so changing a voice meant finding
- * every cell that carried it. A profile is that set of fields with a name on it; a script
- * picks one, and changing it here changes every script that picked it.
- */
-function VoiceProfilesCard() {
-  const queryClient = useQueryClient();
-  const dialog = useDialog();
-  const { data: profiles = [], isLoading } = useQuery({
-    queryKey: ["voiceProfiles"],
-    queryFn: listVoiceProfiles,
-  });
-  const [editing, setEditing] = useState<{ id: string | null; draft: VoiceProfileInput } | null>(
-    null,
-  );
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ["voiceProfiles"] });
-
-  const saveProfile = async () => {
-    if (!editing || !editing.draft.name.trim()) return;
-    if (editing.id) await updateVoiceProfile(editing.id, editing.draft);
-    else await createVoiceProfile(editing.draft);
-    setEditing(null);
-    refresh();
-  };
-
-  const removeProfile = async (profile: VoiceProfile) => {
-    const ok = await dialog.confirm(`Delete the "${profile.name}" voice?`, {
-      body: "Scripts that chose it fall back to their own codes until another is picked.",
-      danger: true,
-    });
-    if (!ok) return;
-    await deleteVoiceProfile(profile._id);
-    refresh();
-  };
-
-  const FIELDS: { key: keyof VoiceProfileInput; label: string; placeholder: string }[] = [
-    { key: "name", label: "Name", placeholder: "Hindi — Roshini" },
-    { key: "language", label: "Language", placeholder: "hindi" },
-    { key: "stt_language", label: "Hears (recognition code)", placeholder: "hi" },
-    { key: "tts_language", label: "Speaks (speech code)", placeholder: "hi" },
-    { key: "tts_model_id", label: "Voice model", placeholder: "sonic-3" },
-    { key: "tts_voice_id", label: "Voice id", placeholder: "47f3bbb1-…" },
-  ];
-
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-900">Voice profiles</h3>
-          <p className="mt-0.5 text-xs text-slate-500">
-            A voice and its language codes, named once. A script picks one per language
-            instead of carrying the codes itself.
-          </p>
-        </div>
-        <button
-          onClick={() => setEditing({ id: null, draft: { ...EMPTY_PROFILE } })}
-          className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-indigo-700"
-        >
-          New profile
-        </button>
-      </div>
-
-      {editing && (
-        <div className="mt-4 rounded-lg border border-indigo-200 bg-indigo-50/40 p-4">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            {FIELDS.map((f) => (
-              <label key={f.key} className="block text-xs font-medium text-slate-600">
-                {f.label}
-                <input
-                  value={(editing.draft[f.key] as string) ?? ""}
-                  onChange={(e) =>
-                    setEditing({ ...editing, draft: { ...editing.draft, [f.key]: e.target.value } })
-                  }
-                  placeholder={f.placeholder}
-                  className={`mt-1 h-9 w-full rounded-lg border border-slate-300 px-2.5 text-sm ${
-                    f.key === "tts_voice_id" ? "font-mono text-xs" : ""
-                  }`}
-                />
-              </label>
-            ))}
-          </div>
-          <div className="mt-3 flex items-center gap-2">
-            <button
-              onClick={saveProfile}
-              disabled={!editing.draft.name.trim()}
-              className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-indigo-700 disabled:opacity-40"
-            >
-              {editing.id ? "Save profile" : "Create profile"}
-            </button>
-            <button
-              onClick={() => setEditing(null)}
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-white"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="mt-4 overflow-x-auto">
-        <table className="w-full text-left text-xs">
-          <thead className="border-b border-slate-100 text-[11px] uppercase tracking-wide text-slate-500">
-            <tr>
-              <th className="py-2 font-semibold">Name</th>
-              <th className="py-2 font-semibold">Language</th>
-              <th className="py-2 font-semibold">Hears</th>
-              <th className="py-2 font-semibold">Speaks</th>
-              <th className="py-2 font-semibold">Model</th>
-              <th className="py-2 font-semibold">Voice</th>
-              <th className="py-2" />
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {profiles.map((p) => (
-              <tr key={p._id} className="hover:bg-slate-50/60">
-                <td className="py-2 font-medium text-slate-900">{p.name}</td>
-                <td className="py-2 text-slate-600">{p.language || "—"}</td>
-                <td className="py-2 font-mono text-slate-600">{p.stt_language || "—"}</td>
-                <td className="py-2 font-mono text-slate-600">{p.tts_language || "—"}</td>
-                <td className="py-2 font-mono text-slate-600">{p.tts_model_id || "—"}</td>
-                <td className="max-w-[12rem] truncate py-2 font-mono text-slate-500" title={p.tts_voice_id}>
-                  {p.tts_voice_id || "default"}
-                </td>
-                <td className="py-2 text-right">
-                  <div className="flex justify-end gap-1">
-                    <button
-                      onClick={() =>
-                        setEditing({
-                          id: p._id,
-                          draft: {
-                            name: p.name,
-                            language: p.language ?? "",
-                            stt_language: p.stt_language ?? "",
-                            tts_language: p.tts_language ?? "",
-                            tts_model_id: p.tts_model_id ?? "",
-                            tts_voice_id: p.tts_voice_id ?? "",
-                            description: p.description ?? "",
-                          },
-                        })
-                      }
-                      title={`Edit ${p.name}`}
-                      className="rounded p-1 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
-                    >
-                      <IconPencil size={13} />
-                    </button>
-                    <button
-                      onClick={() => removeProfile(p)}
-                      title={`Delete ${p.name}`}
-                      className="rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
-                    >
-                      <IconTrash size={13} />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {!isLoading && profiles.length === 0 && (
-              <tr>
-                <td colSpan={7} className="py-5 text-center text-slate-400">
-                  No voices yet. Make one and every script can pick it.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
       </div>
     </div>
   );
@@ -802,7 +615,6 @@ export function Templates() {
             </div>
           </div>
 
-          <VoiceProfilesCard />
 
           <LanguageRoutingCard template={template} save={save} languageKeys={languageKeys} />
         </>

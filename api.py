@@ -90,7 +90,8 @@ USER_TOKEN = hashlib.sha256(f"{settings.API_KEY}:operator".encode()).hexdigest()
 ROLE_PAGES = {
     "admin": [
         "/", "/campaigns", "/sessions", "/calls", "/agents",
-        "/analytics", "/reports", "/templates", "/datasheets", "/settings",
+        "/analytics", "/reports", "/templates", "/datasheets", "/configuration",
+        "/settings",
     ],
     # Conversations is where transcripts and outcomes live, which is the whole point of
     # the product for a collections operator. Config, prompts and agents stay admin-only.

@@ -15,6 +15,7 @@ import { Agents } from "./pages/Agents";
 import { CampaignDetail } from "./pages/CampaignDetail";
 import { Analytics } from "./pages/Analytics";
 import { Settings } from "./pages/Settings";
+import { Configuration } from "./pages/Configuration";
 
 function Protected({ children }: { children: ReactNode }) {
   return (
@@ -65,6 +66,14 @@ function App() {
         element={
           <Protected>
             <Templates />
+          </Protected>
+        }
+      />
+      <Route
+        path="/configuration"
+        element={
+          <Protected>
+            <Configuration />
           </Protected>
         }
       />

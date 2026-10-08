@@ -7,7 +7,6 @@ import {
   IconLogs,
   IconMic,
   IconPhone,
-  IconSettings,
   IconSpeaker,
   IconTag,
   IconWaveform,
@@ -23,10 +22,9 @@ import {
 } from "../api/endpoints";
 import { useAuth } from "../context/AuthContext";
 import type { AppSettings, ProviderCapability } from "../api/types";
-import { DoNotCall } from "../components/DoNotCall";
 
 
-const TABS = ["Providers", "Calling", "Voice & Timing", "System"] as const;
+const TABS = ["Providers", "Calling", "System"] as const;
 type Tab = (typeof TABS)[number];
 
 /** Which AppSettings keys hold the provider + model for each capability. */
@@ -343,12 +341,6 @@ export function Settings() {
               />
             </div>
           </Card>
-          <SaveBar dirty={dirty} pending={saveMutation.isPending} onSave={doSave} />
-        </div>
-      )}
-
-      {tab === "Voice & Timing" && (
-        <div className="space-y-4">
           <Card
             Icon={IconWaveform}
             accent="bg-orange-50 text-orange-600"
@@ -391,7 +383,6 @@ export function Settings() {
             </div>
           </Card>
 
-          <DoNotCall />
 
           <Card
             Icon={IconClock}
@@ -475,27 +466,9 @@ export function Settings() {
               />
             </div>
           </Card>
-
-          <Card
-            Icon={IconSettings}
-            accent="bg-amber-50 text-amber-600"
-            title="Default voice"
-            subtitle="Used when a language in Templates does not specify its own voice."
-          >
-            <div className="grid grid-cols-1 sm:grid-cols-2">
-              <Field
-                label="Voice ID"
-                value={draft.tts_voice_id}
-                onChange={(v) => set("tts_voice_id", v)}
-                placeholder="Voice identifier"
-              />
-            </div>
-          </Card>
-
           <SaveBar dirty={dirty} pending={saveMutation.isPending} onSave={doSave} />
         </div>
       )}
-
 
       {tab === "System" && (
         <div className="space-y-4">

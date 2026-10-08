@@ -13,6 +13,7 @@ import {
   IconMessage,
   IconPhone,
   IconSettings,
+  IconSpeaker,
   IconTemplate,
   IconUsers,
 } from "./Icons";
@@ -37,6 +38,7 @@ const NAV_SECTIONS: { heading: string; items: NavItem[] }[] = [
     items: [
       { to: "/templates", label: "Templates", Icon: IconTemplate },
       { to: "/datasheets", label: "Call Lists", Icon: IconDatabase },
+      { to: "/configuration", label: "Configuration", Icon: IconSpeaker },
       { to: "/settings", label: "Settings", Icon: IconSettings },
     ],
   },
