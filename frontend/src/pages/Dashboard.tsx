@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { OUTCOME_GROUPS, countsForGroups } from "../components/Outcomes";
+import { buildPiles, type Pile } from "../components/Outcomes";
+import { DispositionBadge } from "../components/Disposition";
+import { PhoneNumber } from "../components/PhoneNumber";
 import { formatShare, sharesOf } from "../components/shares";
 import { DateRangeFilter } from "../components/DateRangeFilter";
 import {
@@ -14,12 +16,14 @@ import {
 } from "../components/dateRange";
 import {
   getAnalyticsSummary,
+  getDispositions,
   getHealth,
   listCampaigns,
   listQueueCalls,
   listSessions,
   type AnalyticsSummary,
 } from "../api/endpoints";
+import type { Session } from "../api/types";
 import {
   IconArrowRight,
   IconCampaign,
@@ -42,19 +46,6 @@ type Capability = {
   label: string;
   description: string;
   ready: boolean | undefined;
-};
-
-/**
- * One colour per outcome, shared by the donut, its legend and the trend, so a pile is the
- * same colour wherever it is drawn. Written out in full so the compiler sees the classes.
- */
-const OUTCOME_COLORS: Record<string, { stroke: string; fill: string }> = {
-  promise: { stroke: "stroke-emerald-500", fill: "bg-emerald-500" },
-  refused: { stroke: "stroke-rose-500", fill: "bg-rose-500" },
-  paid: { stroke: "stroke-blue-500", fill: "bg-blue-500" },
-  callback: { stroke: "stroke-amber-500", fill: "bg-amber-500" },
-  unreached: { stroke: "stroke-slate-300", fill: "bg-slate-300" },
-  wrong: { stroke: "stroke-violet-500", fill: "bg-violet-500" },
 };
 
 const KPI_TONES = {
@@ -136,31 +127,20 @@ function Panel({
 
 type Outcomes = {
   analysed: number;
-  otherCodes: number;
-  shareByGroupKey: Record<string, number>;
-  byGroupKey: Record<string, number>;
+  piles: Pile[];
+  shareByKey: Record<string, number>;
 };
 
 /**
- * The six outcome piles as a ring, with the list beside it. Every row is still the link
- * into the calls behind it - the tiles it replaced were links, and a pile nobody can open
- * is just decoration.
+ * The outcome piles as a ring, with the list beside it. Every row is still the link into
+ * the calls behind it - the tiles it replaced were links, and a pile nobody can open is
+ * just decoration.
  */
 function OutcomeDonut({ outcomes, spanQuery }: { outcomes: Outcomes; spanQuery: string }) {
   const [hover, setHover] = useState<string | null>(null);
   const r = 46;
   const circumference = 2 * Math.PI * r;
-  // Codes off the six piles still take their share of the ring, in a quiet grey, so the
-  // ring is every analysed call and matches the percentages beside it.
-  const slices = [
-    ...OUTCOME_GROUPS.map((g) => ({
-      key: g.key,
-      label: g.label,
-      n: outcomes.byGroupKey[g.key] ?? 0,
-      stroke: OUTCOME_COLORS[g.key].stroke,
-    })),
-    { key: "other", label: "Other codes", n: outcomes.otherCodes, stroke: "stroke-slate-100" },
-  ].filter((s) => s.n > 0);
+  const slices = outcomes.piles;
   const many = slices.length > 1;
   let offset = 0;
   const hovered = slices.find((s) => s.key === hover);
@@ -212,26 +192,40 @@ function OutcomeDonut({ outcomes, spanQuery }: { outcomes: Outcomes; spanQuery: 
         </text>
       </svg>
 
-      <div className="min-w-0 flex-1 space-y-0.5">
-        {OUTCOME_GROUPS.map((g) => {
-          const n = outcomes.byGroupKey[g.key] ?? 0;
+      <div className="min-w-0 flex-1 space-y-0.5 overflow-y-auto">
+        {outcomes.piles.map((p) => {
+          const row = (
+            <>
+              <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${p.fill}`} />
+              <span className="min-w-0 flex-1 truncate text-slate-700">{p.label}</span>
+              <span className="w-8 text-right font-semibold tabular-nums text-slate-900">{p.n}</span>
+              <span className="w-14 text-right tabular-nums text-slate-400">
+                ({formatShare(outcomes.shareByKey[p.key] ?? 0)})
+              </span>
+            </>
+          );
+          const className = `flex items-center gap-2.5 rounded-md px-2 py-1 text-xs transition ${
+            hover === p.key ? "bg-slate-50" : ""
+          }`;
+          const title = `${p.n} of ${outcomes.analysed} analysed calls · ${p.hint}`;
+          // The lumped tail stands for several codes at once; there is no one list to open.
+          if (p.key === "__rest__") {
+            return (
+              <div key={p.key} className={className} title={title}>
+                {row}
+              </div>
+            );
+          }
           return (
             <Link
-              key={g.key}
-              to={`/sessions?outcome=${g.key}${spanQuery ? `&${spanQuery}` : ""}`}
-              onMouseEnter={() => setHover(g.key)}
+              key={p.key}
+              to={`/sessions?outcome=${p.key}${spanQuery ? `&${spanQuery}` : ""}`}
+              onMouseEnter={() => setHover(p.key)}
               onMouseLeave={() => setHover(null)}
-              title={`${n} of ${outcomes.analysed} analysed calls · ${g.hint}`}
-              className={`flex items-center gap-2.5 rounded-md px-2 py-1 text-xs transition hover:bg-slate-50 ${
-                hover === g.key ? "bg-slate-50" : ""
-              }`}
+              title={title}
+              className={`${className} hover:bg-slate-50`}
             >
-              <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${OUTCOME_COLORS[g.key].fill}`} />
-              <span className="min-w-0 flex-1 truncate text-slate-700">{g.label}</span>
-              <span className="w-8 text-right font-semibold tabular-nums text-slate-900">{n}</span>
-              <span className="w-14 text-right tabular-nums text-slate-400">
-                ({formatShare(outcomes.shareByGroupKey[g.key] ?? 0)})
-              </span>
+              {row}
             </Link>
           );
         })}
@@ -247,32 +241,39 @@ function niceStep(raw: number): number {
   return (lead <= 1 ? 1 : lead <= 2 ? 2 : lead <= 5 ? 5 : 10) * power;
 }
 
-const TREND_SERIES = [
-  { key: "promises", label: "Promise to pay", fill: "bg-emerald-500" },
-  { key: "refused", label: "Refused to pay", fill: "bg-rose-500" },
-  { key: "paid", label: "Claims paid", fill: "bg-blue-500" },
-  { key: "others", label: "Others", fill: "bg-slate-300" },
-] as const;
-
 /**
  * Calls per day, each bar split by outcome. Only the last seven days that had calls are
  * drawn: the panel shares a row with the outcomes, and a bar for every day of "All time"
  * would be too thin to read or hover. The Analytics page keeps the full run.
+ *
+ * The bands are the same piles as the ring beside it, in the same colours, rather than
+ * three lending outcomes fixed in code - which left a clinic's whole week grey.
  */
-function ConversationsTrend({ days }: { days: AnalyticsSummary["by_day"] }) {
+function ConversationsTrend({
+  days,
+  piles,
+}: {
+  days: AnalyticsSummary["by_day"];
+  piles: Pile[];
+}) {
   const [hover, setHover] = useState<number | null>(null);
+  // Four bands at most: more than that in a 36px bar is a stack of slivers.
+  const series = [
+    ...piles.slice(0, 3).map((p) => ({ key: p.key, label: p.label, fill: p.fill, codes: p.codes })),
+    { key: "others", label: "Others", fill: "bg-slate-300", codes: [] as string[] },
+  ];
   const rows = days.slice(-7).map((d) => {
-    const promises = d.promises;
-    const refused = d.refused ?? 0;
-    const paid = d.paid ?? 0;
-    return {
-      date: d.date,
-      calls: d.calls,
-      promises,
-      refused,
-      paid,
-      others: Math.max(0, d.calls - promises - refused - paid),
-    };
+    const codes = d.codes ?? {};
+    const parts: Record<string, number> = {};
+    let named = 0;
+    for (const s of series) {
+      const n = s.codes.reduce((t, c) => t + (codes[c] ?? 0), 0);
+      parts[s.key] = n;
+      named += n;
+    }
+    // Everything else that day, analysed or not yet scored, so the bar is the day's calls.
+    parts.others = Math.max(0, d.calls - named);
+    return { date: d.date, calls: d.calls, parts };
   });
   const step = niceStep(Math.max(1, ...rows.map((d) => d.calls)) / 4);
   const top = step * 4;
@@ -327,12 +328,12 @@ function ConversationsTrend({ days }: { days: AnalyticsSummary["by_day"] }) {
                     }`}
                     style={{ height: `${(d.calls / top) * 100}%` }}
                   >
-                    {TREND_SERIES.map((s) =>
-                      d[s.key] > 0 ? (
+                    {series.map((s) =>
+                      d.parts[s.key] > 0 ? (
                         <div
                           key={s.key}
                           className={`w-full ${s.fill} last:rounded-t`}
-                          style={{ flexGrow: d[s.key], flexBasis: 0, minHeight: 2 }}
+                          style={{ flexGrow: d.parts[s.key], flexBasis: 0, minHeight: 2 }}
                         />
                       ) : null,
                     )}
@@ -342,13 +343,15 @@ function ConversationsTrend({ days }: { days: AnalyticsSummary["by_day"] }) {
                       <div className="mb-1 font-semibold text-slate-900">
                         {dayLabel(d.date)} · {d.calls} call{d.calls === 1 ? "" : "s"}
                       </div>
-                      {TREND_SERIES.map((s) => (
-                        <div key={s.key} className="flex items-center gap-1.5 text-slate-600">
-                          <span className={`h-2 w-2 rounded-full ${s.fill}`} />
-                          <span className="flex-1">{s.label}</span>
-                          <span className="tabular-nums text-slate-900">{d[s.key]}</span>
-                        </div>
-                      ))}
+                      {series
+                        .filter((s) => d.parts[s.key] > 0)
+                        .map((s) => (
+                          <div key={s.key} className="flex items-center gap-1.5 text-slate-600">
+                            <span className={`h-2 w-2 rounded-full ${s.fill}`} />
+                            <span className="min-w-0 flex-1 truncate">{s.label}</span>
+                            <span className="tabular-nums text-slate-900">{d.parts[s.key]}</span>
+                          </div>
+                        ))}
                     </div>
                   )}
                 </div>
@@ -365,7 +368,7 @@ function ConversationsTrend({ days }: { days: AnalyticsSummary["by_day"] }) {
         </div>
       </div>
       <div className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1 text-[11px] text-slate-500">
-        {TREND_SERIES.map((s) => (
+        {series.map((s) => (
           <span key={s.key} className="flex items-center gap-1.5">
             <span className={`h-2 w-2 rounded-full ${s.fill}`} />
             {s.label}
@@ -376,9 +379,80 @@ function ConversationsTrend({ days }: { days: AnalyticsSummary["by_day"] }) {
   );
 }
 
+/**
+ * The calls themselves, newest first, refreshed while the page is open.
+ *
+ * Everything else here is a period being counted. Somebody placing a call wants to see
+ * that call - during a demo especially - and was having to leave the dashboard to find
+ * out whether it had landed.
+ */
+function LatestCalls({ sessions, labels }: { sessions: Session[]; labels: Record<string, string> }) {
+  const rows = sessions.slice(0, 7);
+  if (rows.length === 0) {
+    return (
+      <p className="mt-3 rounded-lg border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
+        No calls yet. Place one from Test Call and it will appear here.
+      </p>
+    );
+  }
+  const when = (iso?: string | null) =>
+    iso
+      ? new Date(iso).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" })
+      : "";
+  return (
+    <div className="mt-3 divide-y divide-slate-100">
+      {rows.map((s) => (
+        <Link
+          key={s.session_id}
+          to={`/sessions/${encodeURIComponent(s.session_id)}`}
+          className="flex items-center gap-3 py-2 text-xs transition hover:bg-slate-50"
+        >
+          <span className="flex w-28 shrink-0 items-center gap-2 font-medium text-slate-800">
+            {s.active && (
+              <span className="relative flex h-2 w-2 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+              </span>
+            )}
+            <PhoneNumber value={s.phone_number} />
+          </span>
+          <span className="w-44 shrink-0">
+            {s.active ? (
+              <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+                On call now
+              </span>
+            ) : (
+              <DispositionBadge
+                code={s.disposition_code}
+                label={s.disposition_code ? labels[s.disposition_code.toUpperCase()] : undefined}
+                size="sm"
+              />
+            )}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-slate-500">
+            {s.use_case || s.language || ""}
+          </span>
+          <span className="w-12 shrink-0 text-right tabular-nums text-slate-400">
+            {s.duration_seconds ? `${s.duration_seconds}s` : ""}
+          </span>
+          <span className="w-16 shrink-0 text-right tabular-nums text-slate-400">
+            {when(s.created_at)}
+          </span>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
 export function Dashboard() {
   const { data: health } = useQuery({ queryKey: ["health"], queryFn: getHealth, refetchInterval: 15_000 });
-  const { data: sessions } = useQuery({ queryKey: ["sessions"], queryFn: listSessions });
+  // Refreshed on a timer: a call placed from another screen should show up here without
+  // anybody reloading the page.
+  const { data: sessions } = useQuery({
+    queryKey: ["sessions"],
+    queryFn: listSessions,
+    refetchInterval: 10_000,
+  });
   const { data: queue } = useQuery({ queryKey: ["queue"], queryFn: listQueueCalls });
   const { data: campaigns } = useQuery({ queryKey: ["campaigns"], queryFn: listCampaigns });
 
@@ -431,6 +505,17 @@ export function Dashboard() {
     };
   }, [campaigns, span.date_from, span.date_to]);
 
+  // A code means whatever the client's analysis prompt says it means; /dispositions reads
+  // those tables, so SURGERY_CONFIRMED arrives with the clinic's own wording.
+  const { data: dispositions } = useQuery({
+    queryKey: ["dispositions"],
+    queryFn: () => getDispositions(),
+  });
+  const dispositionLabels = useMemo(
+    () => Object.fromEntries((dispositions ?? []).map((d) => [d.value.toUpperCase(), d.label])),
+    [dispositions],
+  );
+
   // What a collections client actually looks at: how many calls produced a promise to
   // pay, how many were refused, how many never reached anyone - in the chosen period.
   const outcomes = useMemo(() => {
@@ -447,31 +532,24 @@ export function Dashboard() {
     const UNREACHED = ["NR", "ICR", "RNR", "LM"];
     const notReached = UNREACHED.reduce((n, code) => n + (counts[code] ?? 0), 0);
     const reached = analysed - notReached;
-    const grouped = countsForGroups(counts);
-    // Codes outside the six piles - ones belonging to other use cases, or any new one the
-    // analysis starts returning - are deliberately left off this page. Saying how many
-    // there are keeps the piles from looking like they should add up to the total.
-    const onTiles = Object.values(grouped).reduce((n, v) => n + v, 0);
+    // Every code the period produced gets a pile, so a clinic sees its own outcomes here
+    // instead of five empty lending rows and one grey wedge called "Other codes".
+    const piles = buildPiles(counts, dispositionLabels);
     // Each pile as a share of every analysed call - "out of a hundred calls, this many" -
-    // with the codes off the piles counted in, so all of it together is 100%.
-    const shares = sharesOf([
-      ...OUTCOME_GROUPS.map((g) => grouped[g.key] ?? 0),
-      analysed - onTiles,
-    ]);
-    const shareByGroupKey: Record<string, number> = Object.fromEntries(
-      OUTCOME_GROUPS.map((g, i) => [g.key, shares[i]]),
+    // apportioned so the column adds to exactly 100.
+    const shares = sharesOf(piles.map((p) => p.n));
+    const shareByKey: Record<string, number> = Object.fromEntries(
+      piles.map((p, i) => [p.key, shares[i]]),
     );
     return {
       analysed,
       reached,
       notReached,
-      onTiles,
-      shareByGroupKey,
-      otherCodes: analysed - onTiles,
+      piles,
+      shareByKey,
       answerRate: analysed > 0 ? Math.round((reached / analysed) * 100) : null,
-      byGroupKey: grouped,
     };
-  }, [summary]);
+  }, [summary, dispositionLabels]);
 
   const capabilities: Capability[] = [
     {
@@ -577,10 +655,9 @@ export function Dashboard() {
           sub={
             outcomes.analysed === 0
               ? "Outcomes appear here once calls have been analysed"
-              : (outcomes.otherCodes > 0
-                  ? `${outcomes.onTiles} of ${outcomes.analysed} analysed calls · ${outcomes.otherCodes} on other codes`
-                  : `Across ${outcomes.analysed} analysed call${outcomes.analysed === 1 ? "" : "s"}`) +
-                ` · ${describeRange(span)}`
+              : `Across ${outcomes.analysed} analysed call${
+                  outcomes.analysed === 1 ? "" : "s"
+                } · ${describeRange(span)}`
           }
           action={{ to: "/sessions", label: "All conversations" }}
         >
@@ -600,9 +677,17 @@ export function Dashboard() {
           sub={days.length > 7 ? "Last 7 days with calls" : "Calls per day"}
           action={{ to: "/analytics", label: "Analytics" }}
         >
-          <ConversationsTrend days={days} />
+          <ConversationsTrend days={days} piles={outcomes.piles} />
         </Panel>
       </div>
+
+      <Panel
+        title="Latest calls"
+        sub="Live - newest first, whoever placed them"
+        action={{ to: "/sessions", label: "All conversations" }}
+      >
+        <LatestCalls sessions={sessions ?? []} labels={dispositionLabels} />
+      </Panel>
 
       {/* System health and quick actions */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">

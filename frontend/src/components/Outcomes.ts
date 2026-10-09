@@ -70,8 +70,58 @@ export const OUTCOME_GROUPS: OutcomeGroup[] = [
   },
 ];
 
+/**
+ * Colours for codes the six piles do not cover - a clinic's, a courier's, whatever the
+ * next client's analysis prompt invents. Fixed list, assigned in the order the codes
+ * appear, so one outcome keeps one colour across the ring, the legend and the trend.
+ */
+const CODE_TONES = [
+  { stroke: "stroke-teal-500", fill: "bg-teal-500" },
+  { stroke: "stroke-indigo-500", fill: "bg-indigo-500" },
+  { stroke: "stroke-orange-500", fill: "bg-orange-500" },
+  { stroke: "stroke-cyan-500", fill: "bg-cyan-500" },
+  { stroke: "stroke-pink-500", fill: "bg-pink-500" },
+  { stroke: "stroke-lime-600", fill: "bg-lime-600" },
+  { stroke: "stroke-sky-500", fill: "bg-sky-500" },
+  { stroke: "stroke-fuchsia-500", fill: "bg-fuchsia-500" },
+];
+
+const GROUP_TONES: Record<string, { stroke: string; fill: string }> = {
+  promise: { stroke: "stroke-emerald-500", fill: "bg-emerald-500" },
+  refused: { stroke: "stroke-rose-500", fill: "bg-rose-500" },
+  paid: { stroke: "stroke-blue-500", fill: "bg-blue-500" },
+  callback: { stroke: "stroke-amber-500", fill: "bg-amber-500" },
+  unreached: { stroke: "stroke-slate-300", fill: "bg-slate-300" },
+  wrong: { stroke: "stroke-violet-500", fill: "bg-violet-500" },
+};
+
+/** RESCHEDULE_REQUESTED -> "Reschedule requested", for a code nobody has labelled. */
+export function prettifyCode(code: string): string {
+  const words = code.replace(/[_-]+/g, " ").trim().toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+const CODE_SHAPE = /^[A-Za-z0-9_-]{1,48}$/;
+
+/** A single disposition code standing in for a group, so one code can be opened like one. */
+export function codeGroup(code: string, label?: string): OutcomeGroup {
+  return {
+    key: code,
+    label: label || prettifyCode(code),
+    codes: [code],
+    hint: code,
+    tile: "border-slate-200 bg-slate-50 hover:border-slate-300",
+    value: "text-slate-700",
+  };
+}
+
 export function groupByKey(key: string | null): OutcomeGroup | undefined {
-  return OUTCOME_GROUPS.find((g) => g.key === key);
+  if (!key) return undefined;
+  const known = OUTCOME_GROUPS.find((g) => g.key === key);
+  if (known) return known;
+  // The dashboard draws a pile per code for clients whose outcomes are their own, and
+  // those piles link here by code. Without this they opened an unfiltered list.
+  return CODE_SHAPE.test(key) ? codeGroup(key.toUpperCase()) : undefined;
 }
 
 /** Count how many of `counts` fall into each group. */
@@ -81,4 +131,75 @@ export function countsForGroups(counts: Record<string, number>): Record<string, 
     out[group.key] = group.codes.reduce((n, code) => n + (counts[code] ?? 0), 0);
   }
   return out;
+}
+
+export type Pile = {
+  key: string;
+  label: string;
+  /** The codes behind it, for the tooltip and for filtering. */
+  codes: string[];
+  n: number;
+  stroke: string;
+  fill: string;
+  hint: string;
+};
+
+/**
+ * The piles to draw for whatever this deployment is actually doing.
+ *
+ * The six collections piles were the whole dashboard, and a clinic's calls - every one of
+ * them SURGERY_CONFIRMED or RESCHEDULE_REQUESTED - landed in a nameless grey "Other
+ * codes" wedge while five empty lending rows took up the legend. So the piles follow the
+ * calls: the six come first when they have anything in them, which keeps promises at the
+ * top for a lender, and every other code the period produced gets a pile of its own.
+ */
+export function buildPiles(
+  counts: Record<string, number>,
+  labels: Record<string, string> = {},
+  max = 8,
+): Pile[] {
+  const grouped = countsForGroups(counts);
+  const claimed = new Set(OUTCOME_GROUPS.flatMap((g) => g.codes));
+
+  const known: Pile[] = OUTCOME_GROUPS.filter((g) => (grouped[g.key] ?? 0) > 0).map((g) => ({
+    key: g.key,
+    label: g.label,
+    codes: g.codes.filter((c) => (counts[c] ?? 0) > 0),
+    n: grouped[g.key],
+    hint: g.hint,
+    ...GROUP_TONES[g.key],
+  }));
+
+  const loose = Object.entries(counts)
+    .filter(([code, n]) => n > 0 && !claimed.has(code))
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([code, n], i) => ({
+      key: code,
+      label: labels[code] || prettifyCode(code),
+      codes: [code],
+      n,
+      hint: code,
+      ...CODE_TONES[i % CODE_TONES.length],
+    }));
+
+  const piles = [...known, ...loose];
+  if (piles.length <= max) return piles;
+
+  // Too many to read. Keep the biggest and say how many calls the rest account for,
+  // rather than drawing slivers nobody can hover.
+  const kept = [...piles].sort((a, b) => b.n - a.n).slice(0, max - 1);
+  const keptKeys = new Set(kept.map((p) => p.key));
+  const rest = piles.filter((p) => !keptKeys.has(p.key));
+  return [
+    ...piles.filter((p) => keptKeys.has(p.key)),
+    {
+      key: "__rest__",
+      label: `${rest.length} smaller outcomes`,
+      codes: rest.flatMap((p) => p.codes),
+      n: rest.reduce((t, p) => t + p.n, 0),
+      hint: rest.map((p) => p.label).join(", "),
+      stroke: "stroke-slate-200",
+      fill: "bg-slate-200",
+    },
+  ];
 }

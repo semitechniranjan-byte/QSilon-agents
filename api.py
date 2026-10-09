@@ -2635,6 +2635,26 @@ async def analytics_summary(
         {"$sort": {"_id": 1}},
     ]).to_list(400)
 
+    # The trend colours each day's bar by outcome, and which outcomes those are is the
+    # client's business, not this function's: a clinic writes SURGERY_CONFIRMED where a
+    # lender writes PTP. The day is broken down by code and the console decides which
+    # piles to draw, instead of three code lists being fixed here.
+    by_day_codes = await sessions.aggregate([
+        {"$match": {
+            **window, "created_at": {"$ne": None}, "disposition_code": {"$nin": [None, ""]},
+        }},
+        {"$group": {
+            "_id": {
+                "day": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}},
+                "code": {"$toUpper": "$disposition_code"},
+            },
+            "count": {"$sum": 1},
+        }},
+    ]).to_list(4000)
+    codes_by_day: Dict[str, Dict[str, int]] = {}
+    for row in by_day_codes:
+        codes_by_day.setdefault(row["_id"]["day"], {})[row["_id"]["code"]] = row["count"]
+
     by_language = await sessions.aggregate([
         {"$match": {**window, "language": {"$nin": [None, ""]}}},
         {"$group": {"_id": "$language", "count": {"$sum": 1}}},
@@ -2708,6 +2728,7 @@ async def analytics_summary(
                 "promises": d["promises"],
                 "refused": d["refused"],
                 "paid": d["paid"],
+                "codes": codes_by_day.get(d["_id"], {}),
             }
             for d in by_day
         ],

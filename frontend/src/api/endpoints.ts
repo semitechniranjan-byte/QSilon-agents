@@ -375,7 +375,15 @@ export interface AnalyticsSummary {
   promises: number;
   promise_rate: number;
   by_disposition: { code: string; count: number }[];
-  by_day: { date: string; calls: number; promises: number; refused?: number; paid?: number }[];
+  by_day: {
+    date: string;
+    calls: number;
+    promises: number;
+    refused?: number;
+    paid?: number;
+    /** That day's calls per disposition code, so a chart can band by whatever the client uses. */
+    codes?: Record<string, number>;
+  }[];
   by_language: { language: string; count: number }[];
   /** Calls per hour of the Indian day, and how many of them reached someone. */
   by_hour: { hour: number; calls: number; answered: number }[];
