@@ -246,10 +246,19 @@ function ConversationsTrend({
   piles: Pile[];
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  // Four bands at most: more than that in a 36px bar is a stack of slivers.
+  // Four bands at most: more than that in a 36px bar is a stack of slivers. The three
+  // are the *biggest* outcomes, not the first three in the legend - taking them in
+  // legend order drew promises, refusals and payments while "Not reachable", 44% of
+  // every call, fell into Others, so almost every bar came out plain grey.
+  const biggest = new Set(
+    [...piles].sort((a, b) => b.n - a.n).slice(0, 3).map((p) => p.key),
+  );
   const series = [
-    ...piles.slice(0, 3).map((p) => ({ key: p.key, label: p.label, fill: p.fill, codes: p.codes })),
-    { key: "others", label: "Others", fill: "bg-slate-300", codes: [] as string[] },
+    ...piles
+      .filter((p) => biggest.has(p.key))
+      .map((p) => ({ key: p.key, label: p.label, fill: p.fill, codes: p.codes })),
+    // A shade off Not reachable's slate-300, which is usually one of the three.
+    { key: "others", label: "Others", fill: "bg-slate-200", codes: [] as string[] },
   ];
   const rows = days.slice(-7).map((d) => {
     const codes = d.codes ?? {};
