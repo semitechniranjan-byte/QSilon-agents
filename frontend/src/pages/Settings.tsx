@@ -185,6 +185,46 @@ function SaveBar({ dirty, pending, onSave }: { dirty: boolean; pending: boolean;
   );
 }
 
+function Toggle({
+  label,
+  checked,
+  onChange,
+  on,
+  off,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  on: string;
+  off: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className="flex w-full items-center justify-between gap-4 rounded-lg border border-slate-200 px-4 py-3 text-left transition hover:border-slate-300"
+    >
+      <span className="min-w-0">
+        <span className="block text-sm font-medium text-slate-800">{label}</span>
+        <span className="mt-0.5 block text-xs text-slate-500">{checked ? on : off}</span>
+      </span>
+      <span
+        className={`relative h-6 w-11 shrink-0 rounded-full transition ${
+          checked ? "bg-indigo-600" : "bg-slate-300"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+            checked ? "left-[22px]" : "left-0.5"
+          }`}
+        />
+      </span>
+    </button>
+  );
+}
+
 function Field({
   label,
   value,
@@ -271,7 +311,8 @@ export function Settings() {
   const { data: logs } = useQuery({ queryKey: ["logs"], queryFn: getLogs, refetchInterval: 5_000 });
 
   const numbers = data?.numbers ?? {};
-  const set = (k: keyof AppSettings, v: string | number) => setDraft({ ...draft, [k]: v });
+  const set = (k: keyof AppSettings, v: string | number | boolean) =>
+    setDraft({ ...draft, [k]: v });
   const doSave = () => saveMutation.mutate(draft);
 
   const activeNetwork = draft.telephony_provider ?? "exotel";
@@ -423,6 +464,21 @@ export function Settings() {
                 hint="A number that did not pick up at ten is a different proposition at four."
               />
             </div>
+          </Card>
+
+          <Card
+            Icon={IconMic}
+            accent="bg-rose-50 text-rose-600"
+            title="Call recording"
+            subtitle="Nothing was recorded before this: the carrier records only when the call is told to, so neither this console nor their dashboard had a single file. Storage is billed per minute started, and every recording is kept, so this is a switch."
+          >
+            <Toggle
+              label="Record calls"
+              checked={draft.record_calls !== false}
+              onChange={(v) => set("record_calls", v)}
+              on="Recording · a link appears on the call and in the report"
+              off="Not recording · nothing is kept, nothing is billed"
+            />
           </Card>
 
           <Card

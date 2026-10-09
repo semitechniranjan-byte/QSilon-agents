@@ -163,6 +163,8 @@ export interface AppSettings {
   silence_first_seconds?: number;
   silence_second_seconds?: number;
   max_call_seconds?: number;
+  /** Ask the carrier to record each call. Off keeps nothing and is billed nothing. */
+  record_calls?: boolean;
   /** Seconds to hold before the greeting, for a carrier that bridges audio late. */
   greeting_delay_seconds?: number;
   /** Hours calls may be placed in. India allows 09:00-21:00 for telemarketing. */

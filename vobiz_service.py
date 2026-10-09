@@ -12,8 +12,8 @@ Docs: https://vobiz.ai/docs/xml/stream and https://vobiz.ai/openapi.json
 """
 
 import logging
-from typing import Dict, Optional
-from urllib.parse import quote
+from typing import Dict, Optional, Tuple
+from urllib.parse import quote, urlparse
 from xml.sax.saxutils import escape as xml_escape
 
 import aiohttp
@@ -24,6 +24,21 @@ except ImportError:  # pragma: no cover
     from config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def sniff_audio_type(audio: bytes) -> str:
+    """The real media type of a recording, read from its first bytes.
+
+    A player that is handed the wrong type refuses to play, and the carrier's own
+    content-type is documented as unreliable.
+    """
+    if audio[:3] == b"ID3" or audio[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+        return "audio/mpeg"
+    if audio[:4] == b"RIFF" and audio[8:12] == b"WAVE":
+        return "audio/wav"
+    if audio[:4] == b"OggS":
+        return "audio/ogg"
+    return "application/octet-stream"
 
 
 class VobizVoiceService:
@@ -37,6 +52,12 @@ class VobizVoiceService:
             settings.VOBIZ_WEBHOOK_BASE_URL or settings.TWILIO_WEBHOOK_BASE_URL or ""
         )
         self.content_type = settings.VOBIZ_STREAM_CONTENT_TYPE
+        # Recording is opt-in on Vobiz: no <Record> in the answer XML means no recording
+        # exists at all - not here, and not in their dashboard either. Settings can flip
+        # these at runtime, which is why they are instance state rather than constants.
+        self.record_calls = settings.VOBIZ_RECORD_CALLS
+        self.record_max_seconds = settings.VOBIZ_RECORD_MAX_SECONDS
+        self.record_format = settings.VOBIZ_RECORD_FORMAT
 
     def _validate(self) -> None:
         if not self.auth_id or not self.auth_token:
@@ -144,11 +165,37 @@ class VobizVoiceService:
             logger.warning("Vobiz hangup error for %s: %s", call_uuid, exc)
             return False
 
+    def build_record_element(self, session_id: str) -> str:
+        """`<Record>` for the whole conversation, or "" when recording is switched off.
+
+        Three defaults would each quietly ruin this: `maxLength` is 60 seconds, which cuts
+        a normal collection call in half; `playBeep` is on, so the customer hears a beep
+        before the agent speaks; and `recordSession` is off, which records only what the
+        customer says rather than the conversation.
+        """
+        if not (self.record_calls and self.webhook_url):
+            return ""
+        callback = xml_escape(
+            f"{self.webhook_url.rstrip('/')}/webhooks/vobiz/recording"
+            f"?session_id={quote(session_id, safe='')}"
+        )
+        return (
+            f'  <Record recordSession="true" redirect="false" playBeep="false" '
+            f'fileFormat="{xml_escape(self.record_format)}" '
+            f'maxLength="{int(self.record_max_seconds)}" '
+            # Both hooks point here: `action` carries the recording id as it starts,
+            # `callbackUrl` carries the finished file. Which of the two a provider
+            # actually fires is not worth guessing at.
+            f'action="{callback}" callbackUrl="{callback}"/>\n'
+        )
+
     def build_stream_response(self, session_id: str) -> str:
         """XML that forks the call audio to /vobiz-stream in bidirectional mode.
 
         `keepCallAlive` pauses any following XML until the stream ends, which is what holds
-        the call open for the length of the conversation.
+        the call open for the length of the conversation - and also why <Record> has to come
+        first. Anything after the stream element runs only once the call is over, so a
+        recording asked for down there would never start.
         """
         ws_base = (
             (self.webhook_url or "")
@@ -161,11 +208,40 @@ class VobizVoiceService:
         return (
             '<?xml version="1.0" encoding="UTF-8"?>\n'
             "<Response>\n"
+            f"{self.build_record_element(session_id)}"
             f'  <Stream bidirectional="true" keepCallAlive="true" '
             f'contentType="{content_type}" audioTrack="inbound" '
             f'streamTimeout="86400">{stream_url}</Stream>\n'
             "</Response>"
         )
+
+    def recording_url_allowed(self, url: str) -> bool:
+        """Only the carrier's own hosts, so a stored URL cannot aim this server elsewhere."""
+        try:
+            host = (urlparse(url).hostname or "").lower()
+        except ValueError:
+            return False
+        api_host = (urlparse(self.api_base).hostname or "").lower()
+        return bool(host) and (host == api_host or host.endswith(".vobiz.ai") or host == "vobiz.ai")
+
+    async def fetch_recording(self, url: str) -> Tuple[bytes, str]:
+        """Download one recording with the account's auth headers.
+
+        Vobiz's recording URLs are not public, so this is the only way the audio reaches a
+        browser. Their docs warn that the extension and content-type can disagree with what
+        is actually in the file, so the type is read from the first bytes instead.
+        """
+        self._validate()
+        if not self.recording_url_allowed(url):
+            raise ValueError(f"refusing to fetch a recording from {url!r}")
+        headers = {"X-Auth-ID": self.auth_id, "X-Auth-Token": self.auth_token}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                if response.status != 200:
+                    body = (await response.text())[:200]
+                    raise RuntimeError(f"Vobiz returned {response.status} for the recording: {body}")
+                audio = await response.read()
+        return audio, sniff_audio_type(audio)
 
     def build_speak_response(self, text: str) -> str:
         """Plain <Speak> fallback, used only when the stream cannot be opened."""

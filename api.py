@@ -33,6 +33,7 @@ try:
     from . import row_filter
     from . import row_sync
     from . import result_columns
+    from . import recording_links
 except ImportError:  # pragma: no cover
     from analyze_sessions import router as analyze_sessions_router, init_analyze_sessions
     from call_handler import CallHandler, LLM_HEDGE_AFTER_SECONDS
@@ -46,6 +47,7 @@ except ImportError:  # pragma: no cover
     import row_filter
     import row_sync
     import result_columns
+    import recording_links
 
 app = FastAPI(title="Minimal Voice Clone API")
 # When the built frontend is served by this same app the origin matches and CORS is moot,
@@ -288,6 +290,7 @@ async def startup() -> None:
     _log_configuration_report()
     await _release_stale_campaigns()
     await handler.initialize(persist_session=False)
+    _apply_recording_setting(await handler.db.get_app_settings() or {})
     asyncio.create_task(_retry_sweeper())
     await _initialize_analysis_support()
 
@@ -483,6 +486,9 @@ class AppSettingsRequest(BaseModel):
     silence_first_seconds: Optional[int] = None
     silence_second_seconds: Optional[int] = None
     max_call_seconds: Optional[int] = None
+    # Recording is billed by the carrier per 60-second block and stored per month, so it
+    # is a switch rather than something hard-wired into the answer XML.
+    record_calls: Optional[bool] = None
 
 
 class CampaignRequest(BaseModel):
@@ -775,6 +781,11 @@ async def get_session(session_id: str) -> dict:
     if not session:
         raise HTTPException(status_code=404, detail="session not found")
     session["_id"] = str(session.get("_id"))
+    link = _recording_link(session)
+    if link:
+        session["recording_url"] = link
+    # The carrier's own URL is no use to a browser and is nobody else's business.
+    session.pop("recording_source_url", None)
     return {"session": session}
 
 
@@ -1305,6 +1316,137 @@ async def vobiz_hangup(request: Request) -> JSONResponse:
         await handler.finalize_call(session_id, status="completed", reason="vobiz_hangup_callback")
         await row_sync.sync_row_from_session(handler.db, session_id)
     return JSONResponse({"status": "ok", "session_id": session_id})
+
+
+def _public_base_url() -> str:
+    """Where this app is reachable from outside - the same host the carrier calls back on."""
+    return (settings.VOBIZ_WEBHOOK_BASE_URL or settings.TWILIO_WEBHOOK_BASE_URL or "").rstrip("/")
+
+
+def _recording_link(session: dict) -> str:
+    """A link to this call's recording that is valid from now, or "" when there is none.
+
+    Signed at the moment it is handed out rather than when the call ended, so a report
+    exported today plays for its full life instead of inheriting what was left of the
+    link written months ago.
+    """
+    if not (session.get("recording_source_url") or session.get("recording_url")):
+        return ""
+    base, sid = _public_base_url(), session.get("session_id") or ""
+    if not (base and sid):
+        return session.get("recording_url") or ""
+    return recording_links.playback_url(base, sid)
+
+
+# A callback that answers with XML is answering a live call. Empty means "carry on".
+EMPTY_XML = '<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>'
+
+
+# Vobiz's own documentation does not pin down the field names on a recording callback, and
+# their method (GET or POST) is not stated either. Both verbs are accepted and every
+# plausible spelling is tried, which is cheaper than losing a recording to a guess.
+@app.api_route("/webhooks/vobiz/recording", methods=["GET", "POST"])
+async def vobiz_recording(request: Request) -> PlainTextResponse:
+    """Where a finished recording is reported.
+
+    `<Record>` fires twice: once as it starts, carrying the recording's id, and once at
+    RecordStop with the file. Both arrive here. The carrier's URL is kept privately as
+    `recording_source_url` - it needs the account's auth headers - while `recording_url`
+    is a signed link to this app, which is what a player, a report and the client's own
+    sheet can actually open.
+    """
+    try:
+        form_data = dict(await request.form())
+    except Exception:
+        form_data = {}
+    if not form_data:
+        try:
+            form_data = dict(await request.json())
+        except Exception:
+            form_data = {}
+    form_data = {**dict(request.query_params), **form_data}
+    session_id = form_data.get("session_id")
+    event = _first_present(form_data, "Event", "event") or "?"
+    logger.warning("Vobiz recording callback %r for session %r: %s", event, session_id, form_data)
+
+    if not session_id:
+        return PlainTextResponse(EMPTY_XML, media_type="application/xml")
+
+    source_url = _first_present(
+        form_data, "RecordUrl", "RecordFile", "RecordingUrl", "RecordingURL",
+        "recording_url", "record_url", "Url", "url",
+    )
+    updates: Dict[str, Any] = {}
+    recording_id = _first_present(
+        form_data, "RecordingID", "RecordingId", "RecordUUID", "recording_id", "RecordingUUID"
+    )
+    if recording_id:
+        updates["recording_id"] = str(recording_id)
+    if source_url:
+        updates["recording_source_url"] = source_url
+        base = _public_base_url()
+        # Without a public base there is nothing to link to; the carrier's URL is kept
+        # anyway, so the link can be rebuilt once the host is configured.
+        if base:
+            updates["recording_url"] = recording_links.playback_url(base, session_id)
+    for field, keys in (
+        ("recording_seconds", ("RecordingDuration", "RecordDuration", "Duration")),
+        ("recording_end_reason", ("RecordingEndReason", "EndReason")),
+    ):
+        value = _first_present(form_data, *keys)
+        if value not in (None, ""):
+            updates[field] = value
+
+    if updates:
+        await handler.db.sessions.update_one({"session_id": session_id}, {"$set": updates})
+        # The client's sheet has a RECORDING_URL column; this is the moment it can be filled.
+        if "recording_url" in updates:
+            await row_sync.sync_row_from_session(handler.db, session_id)
+    # redirect="false" means this response must not try to drive the call.
+    return PlainTextResponse(EMPTY_XML, media_type="application/xml")
+
+
+@app.get("/recordings/{session_id}")
+async def get_recording(
+    session_id: str,
+    t: Optional[str] = None,
+    download: bool = False,
+    x_api_key: Optional[str] = Header(None),
+) -> Response:
+    """Play or download one call's recording.
+
+    Signed in, the key is enough. Otherwise the link's own signature stands in for it, so
+    a client can open a recording from a report they were sent without an account here.
+    """
+    if _role_for_token(x_api_key) is None and not recording_links.verify(session_id, t):
+        raise HTTPException(status_code=403, detail="this recording link is not valid any more")
+
+    session = await handler.db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="session not found")
+    source_url = session.get("recording_source_url") or session.get("recording_url")
+    if not source_url or not handler.telephony_vobiz.recording_url_allowed(source_url):
+        raise HTTPException(status_code=404, detail="this call has no recording")
+
+    try:
+        audio, media_type = await handler.telephony_vobiz.fetch_recording(source_url)
+    except Exception as exc:
+        logger.error("Recording fetch failed for %s: %s", session_id, exc)
+        raise HTTPException(status_code=502, detail="the recording could not be fetched") from exc
+
+    suffix = {"audio/mpeg": "mp3", "audio/wav": "wav", "audio/ogg": "ogg"}.get(media_type, "bin")
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)
+    return Response(
+        content=audio,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": (
+                f'{"attachment" if download else "inline"}; filename="{safe_name}.{suffix}"'
+            ),
+            # The audio never changes once written, and a player re-requests it on seek.
+            "Cache-Control": "private, max-age=3600",
+        },
+    )
 
 
 @app.post("/webhooks/plivo/answer")
@@ -2124,6 +2266,7 @@ REPORT_COLUMNS = [
     ("Ended by", lambda s, m, n: s.get("hangup_source") or ""),
     ("Summary", lambda s, m, n: _clean(m.get("summary"))),
     ("Customer said", lambda s, m, n: _clean(m.get("customer_said"))),
+    ("Recording", lambda s, m, n: _recording_link(s)),
     ("Session id", lambda s, m, n: s.get("session_id") or ""),
 ]
 
@@ -2763,7 +2906,20 @@ DEFAULT_APP_SETTINGS = {
     "silence_first_seconds": 12,
     "silence_second_seconds": 12,
     "max_call_seconds": 150,
+    "record_calls": settings.VOBIZ_RECORD_CALLS,
 }
+
+
+def _apply_recording_setting(stored: dict) -> None:
+    """Carry the stored switch into the service that writes the answer XML.
+
+    The answer webhook builds that XML while the caller listens to silence, so it cannot
+    afford a database read; the value is kept in memory and refreshed whenever Settings
+    is saved and once at startup."""
+    value = stored.get("record_calls")
+    handler.telephony_vobiz.record_calls = (
+        settings.VOBIZ_RECORD_CALLS if value is None else bool(value)
+    )
 
 
 @app.get("/settings")
@@ -2804,6 +2960,7 @@ async def get_app_settings() -> dict:
 async def update_app_settings(payload: AppSettingsRequest) -> dict:
     data = payload.model_dump(exclude_none=True)
     await handler.db.set_app_settings(data)
+    _apply_recording_setting(data)
     return await get_app_settings()
 
 

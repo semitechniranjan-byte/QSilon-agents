@@ -84,6 +84,16 @@ class Settings:
     # Vobiz accepts L16 at 8/16/24 kHz or mu-law at 8 kHz. L16 8 kHz matches what Deepgram
     # is fed elsewhere, so no resampling or codec conversion is needed.
     VOBIZ_STREAM_CONTENT_TYPE: str = os.getenv("VOBIZ_STREAM_CONTENT_TYPE", "audio/x-l16;rate=8000")
+    # Vobiz records nothing unless the answer XML asks it to, which is why no call before
+    # this had a recording on either side. Storage is billed per 60-second block, so this
+    # is a switch, and Settings can turn it off without a deploy.
+    VOBIZ_RECORD_CALLS: bool = os.getenv("VOBIZ_RECORD_CALLS", "true").lower() != "false"
+    # <Record> defaults to maxLength=60, which would cut every call at one minute.
+    VOBIZ_RECORD_MAX_SECONDS: int = int(os.getenv("VOBIZ_RECORD_MAX_SECONDS", "900"))
+    VOBIZ_RECORD_FORMAT: str = os.getenv("VOBIZ_RECORD_FORMAT", "mp3")
+    # How long a signed recording link stays playable. A client opens one from a report
+    # weeks after the call, so this is months rather than hours.
+    RECORDING_LINK_DAYS: int = int(os.getenv("RECORDING_LINK_DAYS", "90"))
 
     # Hard ceiling on simultaneous live calls, whatever the agents are configured for.
     # Agent capacity describes what a pool is *allowed* to do; this describes what the
