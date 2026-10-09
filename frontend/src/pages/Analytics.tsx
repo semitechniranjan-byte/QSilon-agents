@@ -9,7 +9,7 @@ import {
 } from "../api/endpoints";
 import { formatShare, sharesOf } from "../components/shares";
 import { labelForCode, tonesForCodes } from "../components/Outcomes";
-import { AreaTrend, BarsWithLine, Funnel, MiniDonut, ShareBar } from "../components/charts";
+import { AreaTrend, Funnel, HourClock, MiniDonut, ShareBar } from "../components/charts";
 
 function isoDaysAgo(days: number): string {
   const d = new Date();
@@ -247,44 +247,56 @@ export function Analytics() {
           </div>
         </div>
 
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-slate-900">Languages</h2>
+          {languageTotal > 0 && (
+            <p className="mt-0.5 text-xs text-slate-500">
+              Share of the {languageTotal.toLocaleString("en-IN")} calls with a language.
+            </p>
+          )}
+          {languages.length > 0 ? (
+            <MiniDonut
+              total={languageTotal}
+              centreLabel="Calls"
+              slices={languages.map((l, i) => ({
+                key: l.language,
+                label: l.language,
+                n: l.count,
+                share: formatShare(languageShares[i]),
+                ...LANGUAGE_TONES[i % LANGUAGE_TONES.length],
+              }))}
+            />
+          ) : (
+            !isLoading && <p className="mt-4 text-xs text-slate-400">No calls yet.</p>
+          )}
+        </div>
+
         {/* The two questions a desk asks every week and had to guess at: when is it worth
             ringing, and is a fourth attempt worth placing. Both are read off the calls. */}
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
           <h2 className="text-sm font-semibold text-slate-900">When calls connect</h2>
           <p className="mt-0.5 text-xs text-slate-500">
-            By hour of the Indian day: how many went out, and how many of them reached
-            someone.
+            The Indian day as a clock. Each spoke is an hour, as long as the calls that
+            went out in it.
             {callingHours.length === 2 && (
-              <> Calls are meant to go out between {callingHours[0]}:00 and {callingHours[1]}:00;
-              anything outside it is amber.</>
+              <> Calls are meant to go out between {callingHours[0]}:00 and {callingHours[1]}:00,
+              the shaded arc.</>
             )}
           </p>
           {(summary?.by_hour ?? []).length === 0 ? (
             <p className="mt-4 text-xs text-slate-400">No calls in this period.</p>
           ) : (
-            <BarsWithLine
-              labels={hours.map((h) => String(h.hour))}
-              bars={hours.map((h) => h.calls)}
-              rates={hours.map((h) => (h.calls ? (h.answered / h.calls) * 100 : null))}
-              barClass={(i) =>
-                callingHours.length !== 2 ||
-                (hours[i].hour >= callingHours[0] && hours[i].hour < callingHours[1])
-                  ? "bg-indigo-500"
-                  : "bg-amber-400"
-              }
-              barLabel="Inside calling hours"
-              legendExtra={[{ label: "Outside", className: "bg-amber-400" }]}
-              lineLabel="Reached someone"
-              tooltip={(i) =>
-                `${hours[i].hour}:00 — ${hours[i].calls} calls, ${hours[i].answered} reached someone`
-              }
+            <HourClock
+              hours={hours}
+              callingWindow={callingHours.length === 2 ? callingHours : null}
             />
           )}
           {outsideHours > 0 && (
             <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              <strong>{outsideHours}</strong> of {summary?.total ?? 0} calls went out outside{" "}
-              {callingHours[0]}:00–{callingHours[1]}:00. Collection calls are only allowed
-              until 19:00.
+              <strong>{outsideHours}</strong> of {summary?.total ?? 0} calls in this period went
+              out outside {callingHours[0]}:00–{callingHours[1]}:00. The RBI allows recovery
+              calls between 08:00 and 19:00, so a window ending later than that is worth a
+              look in Settings.
             </p>
           )}
         </div>
@@ -312,29 +324,6 @@ export function Analytics() {
           )}
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-slate-900">Languages</h2>
-          {languageTotal > 0 && (
-            <p className="mt-0.5 text-xs text-slate-500">
-              Share of the {languageTotal.toLocaleString("en-IN")} calls with a language.
-            </p>
-          )}
-          {languages.length > 0 ? (
-            <MiniDonut
-              total={languageTotal}
-              centreLabel="Calls"
-              slices={languages.map((l, i) => ({
-                key: l.language,
-                label: l.language,
-                n: l.count,
-                share: formatShare(languageShares[i]),
-                ...LANGUAGE_TONES[i % LANGUAGE_TONES.length],
-              }))}
-            />
-          ) : (
-            !isLoading && <p className="mt-4 text-xs text-slate-400">No calls yet.</p>
-          )}
-        </div>
       </div>
 
 

@@ -411,7 +411,7 @@ export function MiniDonut({
   let offset = 0;
 
   return (
-    <div className="mt-4 flex items-center gap-4">
+    <div className="mt-4 flex flex-wrap items-center justify-center gap-4">
       <svg viewBox="0 0 120 120" className="h-28 w-28 shrink-0 -rotate-90">
         {drawn.map((s) => {
           const length = (s.n / Math.max(total, 1)) * circumference;
@@ -453,7 +453,7 @@ export function MiniDonut({
           {hovered ? hovered.label.slice(0, 14) : centreLabel}
         </text>
       </svg>
-      <div className="min-w-0 flex-1 space-y-1">
+      <div className="min-w-[9rem] flex-1 space-y-1">
         {drawn.map((s) => (
           <div
             key={s.key}
@@ -466,7 +466,7 @@ export function MiniDonut({
             <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${s.fill}`} />
             <span className="min-w-0 flex-1 truncate capitalize text-slate-700">{s.label}</span>
             <span className="tabular-nums font-semibold text-slate-900">{s.n}</span>
-            <span className="w-12 text-right tabular-nums text-slate-400">{s.share}</span>
+            <span className="w-11 shrink-0 text-right tabular-nums text-slate-400">{s.share}</span>
           </div>
         ))}
       </div>
@@ -493,6 +493,144 @@ export function ShareBar({
             title={`${s.label}: ${s.n} (${s.share})`}
           />
         ))}
+    </div>
+  );
+}
+
+/**
+ * The day as a clock: twenty-four spokes, each one an hour's calls.
+ *
+ * "When calls connect" is a question about time of day, and a row of bars numbered 0 to
+ * 23 makes you read the numbers to find the evening. On a dial the shape is the answer -
+ * a cluster at the top means the dialler has been running at midnight. The shaded arc is
+ * the window calls are allowed in, so anything sticking out of it is the problem,
+ * visible without reading a single label.
+ */
+export function HourClock({
+  hours,
+  callingWindow,
+  size = 260,
+}: {
+  hours: { hour: number; calls: number; answered: number }[];
+  callingWindow: number[] | null;
+  size?: number;
+}) {
+  const c = size / 2;
+  const inner = size * 0.17;
+  const outer = size * 0.39;
+  const peak = Math.max(1, ...hours.map((h) => h.calls));
+  const total = hours.reduce((t, h) => t + h.calls, 0);
+
+  const at = (r: number, hour: number) => {
+    const a = ((hour / 24) * 360 - 90) * (Math.PI / 180);
+    return [c + r * Math.cos(a), c + r * Math.sin(a)] as const;
+  };
+  const sector = (r0: number, r1: number, h0: number, h1: number) => {
+    const [x0, y0] = at(r1, h0);
+    const [x1, y1] = at(r1, h1);
+    const [x2, y2] = at(r0, h1);
+    const [x3, y3] = at(r0, h0);
+    const large = (h1 - h0 + 24) % 24 > 12 ? 1 : 0;
+    return `M${x0},${y0} A${r1},${r1} 0 ${large} 1 ${x1},${y1} L${x2},${y2} A${r0},${r0} 0 ${large} 0 ${x3},${y3} Z`;
+  };
+
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-center gap-6">
+      <svg viewBox={`0 0 ${size} ${size}`} className="h-60 w-60 shrink-0">
+        {callingWindow?.length === 2 && (
+          <path
+            d={sector(inner, outer + 4, callingWindow[0], callingWindow[1])}
+            className="fill-emerald-50"
+          />
+        )}
+        <circle cx={c} cy={c} r={inner} fill="none" className="stroke-slate-200" strokeWidth={1} />
+        <circle cx={c} cy={c} r={outer + 4} fill="none" className="stroke-slate-100" strokeWidth={1} />
+
+        {hours.map((h) => {
+          const length = (h.calls / peak) * (outer - inner);
+          const reached = h.calls ? (h.answered / h.calls) * length : 0;
+          const [x0, y0] = at(inner, h.hour + 0.5);
+          const [x1, y1] = at(inner + length, h.hour + 0.5);
+          const [x2, y2] = at(inner + reached, h.hour + 0.5);
+          const outsideWindow =
+            callingWindow?.length === 2 &&
+            !(h.hour >= callingWindow[0] && h.hour < callingWindow[1]);
+          return (
+            <g key={h.hour}>
+              <title>
+                {`${String(h.hour).padStart(2, "0")}:00 — ${h.calls} call${
+                  h.calls === 1 ? "" : "s"
+                }, ${h.answered} reached someone${outsideWindow ? " (outside the window)" : ""}`}
+              </title>
+              {h.calls > 0 && (
+                <>
+                  <line
+                    x1={x0}
+                    y1={y0}
+                    x2={x1}
+                    y2={y1}
+                    strokeWidth={size * 0.034}
+                    strokeLinecap="round"
+                    className={outsideWindow ? "stroke-amber-300" : "stroke-slate-200"}
+                  />
+                  {h.answered > 0 && (
+                    <line
+                      x1={x0}
+                      y1={y0}
+                      x2={x2}
+                      y2={y2}
+                      strokeWidth={size * 0.034}
+                      strokeLinecap="round"
+                      className={outsideWindow ? "stroke-amber-500" : "stroke-emerald-500"}
+                    />
+                  )}
+                </>
+              )}
+            </g>
+          );
+        })}
+
+        {[0, 3, 6, 9, 12, 15, 18, 21].map((h) => {
+          const [x, y] = at(outer + size * 0.055, h + 0.5);
+          return (
+            <text
+              key={h}
+              x={x}
+              y={y}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              className="fill-slate-400 text-[10px]"
+            >
+              {h}
+            </text>
+          );
+        })}
+
+        <text x={c} y={c - 3} textAnchor="middle" className="fill-slate-900 text-[18px] font-semibold">
+          {total}
+        </text>
+        <text x={c} y={c + 11} textAnchor="middle" className="fill-slate-400 text-[8px]">
+          calls
+        </text>
+      </svg>
+
+      <div className="min-w-0 space-y-1.5 text-[11px] text-slate-600">
+        {[
+          { label: "Reached someone", cls: "bg-emerald-500" },
+          { label: "Nobody answered", cls: "bg-slate-200" },
+          { label: "Outside the window", cls: "bg-amber-500" },
+          { label: "Calling window", cls: "bg-emerald-50 ring-1 ring-emerald-200" },
+        ].map((i) => (
+          <div key={i.label} className="flex items-center gap-2">
+            <span className={`h-2.5 w-2.5 shrink-0 rounded-sm ${i.cls}`} />
+            {i.label}
+          </div>
+        ))}
+        <p className="max-w-[12rem] pt-1 text-[10px] leading-snug text-slate-400">
+          Midnight at the top, noon at the bottom. The further a spoke reaches, the more
+          calls went out in that hour.
+        </p>
+      </div>
     </div>
   );
 }

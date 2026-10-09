@@ -2188,6 +2188,20 @@ async def set_dispositions(payload: DispositionsUpdateRequest) -> dict:
     return {"dispositions": data}
 
 
+def _dated(window: dict, **extra) -> dict:
+    """`window` plus further conditions, without one created_at clause silently replacing
+    the other.
+
+    Spreading a window and then writing "created_at" again in the same dict literal drops
+    the date range - the later key wins - so the per-day and per-hour counts were taken
+    over every call ever made whatever period was chosen. The giveaway was the
+    outside-hours line reporting 57 calls out of a period holding 49.
+    """
+    query = {**window, **extra}
+    query["created_at"] = {**(window.get("created_at") or {}), "$ne": None}
+    return query
+
+
 def _session_window(date_from: Optional[str], date_to: Optional[str]) -> dict:
     """A created_at filter built from two optional YYYY-MM-DD strings."""
     window: dict = {}
@@ -2614,7 +2628,7 @@ async def analytics_summary(
     ]).to_list(50)
 
     by_day = await sessions.aggregate([
-        {"$match": {**window, "created_at": {"$ne": None}}},
+        {"$match": _dated(window)},
         {"$group": {
             "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}},
             "calls": {"$sum": 1},
@@ -2640,9 +2654,7 @@ async def analytics_summary(
     # lender writes PTP. The day is broken down by code and the console decides which
     # piles to draw, instead of three code lists being fixed here.
     by_day_codes = await sessions.aggregate([
-        {"$match": {
-            **window, "created_at": {"$ne": None}, "disposition_code": {"$nin": [None, ""]},
-        }},
+        {"$match": _dated(window, disposition_code={"$nin": [None, ""]})},
         {"$group": {
             "_id": {
                 "day": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}},
@@ -2666,7 +2678,7 @@ async def analytics_summary(
     # policy from these two numbers, and until now it had to guess at both.
     unreached = ["NR", "RNR", "ICR", "LM", "NO_ANSWER"]
     hours = await sessions.aggregate([
-        {"$match": {**window, "created_at": {"$ne": None}}},
+        {"$match": _dated(window)},
         {"$group": {
             # Stored in UTC; a calling window is a local thing.
             "_id": {"$hour": {"date": "$created_at", "timezone": "Asia/Kolkata"}},
