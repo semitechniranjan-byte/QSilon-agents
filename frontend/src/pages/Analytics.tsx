@@ -7,14 +7,25 @@ import {
   listAnalyzeJobs,
   startAnalyzeJob,
 } from "../api/endpoints";
-import { dispositionTone } from "../components/Disposition";
 import { formatShare, sharesOf } from "../components/shares";
+import { labelForCode, tonesForCodes } from "../components/Outcomes";
+import { AreaTrend, BarsWithLine, Funnel, MiniDonut, ShareBar } from "../components/charts";
 
 function isoDaysAgo(days: number): string {
   const d = new Date();
   d.setDate(d.getDate() - days);
   return d.toISOString().slice(0, 10);
 }
+
+// Languages are not outcomes, so they take their own ramp rather than borrowing one
+// that means "promise to pay" everywhere else on the page.
+const LANGUAGE_TONES = [
+  { stroke: "stroke-violet-500", fill: "bg-violet-500" },
+  { stroke: "stroke-sky-500", fill: "bg-sky-500" },
+  { stroke: "stroke-orange-400", fill: "bg-orange-400" },
+  { stroke: "stroke-lime-600", fill: "bg-lime-600" },
+  { stroke: "stroke-pink-500", fill: "bg-pink-500" },
+];
 
 const RANGES = [
   { label: "7 days", days: 7 },
@@ -56,21 +67,30 @@ export function Analytics() {
   });
 
   const days = summary?.by_day ?? [];
-  const busiest = Math.max(1, ...days.map((d) => d.calls));
   const total = summary?.total ?? 0;
   const outcomeRows = summary?.by_disposition ?? [];
   // Shares are of the scored calls the list is made of - dividing by every call in the
   // period would leave the column short of 100 whenever some calls were never scored.
   const outcomeTotal = outcomeRows.reduce((s, d) => s + d.count, 0);
   const outcomeShares = sharesOf(outcomeRows.map((d) => d.count));
-  const hours = summary?.by_hour ?? [];
-  const busiestHour = Math.max(1, ...hours.map((h) => h.calls));
+  // Every hour of the day, not only the ones that had calls: a list that jumped from 1
+  // to 10 read like a sorting fault, and a gap at 3am is itself worth seeing.
+  const hours = useMemo(() => {
+    const seen = new Map((summary?.by_hour ?? []).map((h) => [h.hour, h]));
+    return Array.from({ length: 24 }, (_, hour) => seen.get(hour) ?? { hour, calls: 0, answered: 0 });
+  }, [summary]);
   const attempts = summary?.by_attempt ?? [];
   const callingHours = summary?.calling_hours ?? [];
   const outsideHours = summary?.outside_calling_hours ?? 0;
   const languages = summary?.by_language ?? [];
   const languageTotal = languages.reduce((s, l) => s + l.count, 0);
   const languageShares = sharesOf(languages.map((l) => l.count));
+  // One colour per code, agreeing with the dashboard: a code in one of the six piles
+  // keeps that pile's colour, the rest take the palette biggest-first.
+  const outcomeTones = useMemo(
+    () => tonesForCodes((summary?.by_disposition ?? []).map((d) => d.code)),
+    [summary],
+  );
 
   return (
     <div className="space-y-5 pb-6">
@@ -124,38 +144,32 @@ export function Analytics() {
       <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-sm font-semibold text-slate-900">Calls per day</h2>
         <p className="mt-0.5 text-xs text-slate-500">
-          The darker part of each bar is the promises that came out of that day.
+          Every call placed, and the promises that came out of them.
         </p>
         {days.length === 0 && !isLoading ? (
           <p className="mt-4 text-xs text-slate-400">No calls in this period.</p>
         ) : (
-          <div className="mt-5 flex h-40 items-end gap-1.5 overflow-x-auto">
-            {days.map((d) => {
-              const height = (d.calls / busiest) * 100;
-              const promiseShare = d.calls ? (d.promises / d.calls) * 100 : 0;
-              return (
-                <div key={d.date} className="flex h-full min-w-[26px] flex-1 flex-col items-center gap-1">
-                  <span className="text-[9px] text-slate-400">{d.calls}</span>
-                  {/* The column is the full height of the chart and the bar takes a share
-                      of it. Without a definite height on the column, a percentage has
-                      nothing to resolve against and every bar collapsed to nothing. */}
-                  <div className="flex w-full flex-1 flex-col justify-end">
-                    <div
-                      className="relative flex w-full flex-col justify-end overflow-hidden rounded-t bg-indigo-200"
-                      style={{ height: `${Math.max(height, 4)}%` }}
-                      title={`${d.date}: ${d.calls} calls, ${d.promises} promises`}
-                    >
-                      <div
-                        className="w-full bg-indigo-600"
-                        style={{ height: `${promiseShare}%` }}
-                      />
-                    </div>
-                  </div>
-                  <span className="text-[9px] text-slate-400">{d.date.slice(5)}</span>
-                </div>
-              );
-            })}
-          </div>
+          <AreaTrend
+            labels={days.map((d) => d.date.slice(5))}
+            series={[
+              {
+                key: "calls",
+                label: "Calls",
+                stroke: "stroke-indigo-600",
+                fill: "bg-indigo-600",
+                area: "fill-indigo-200",
+                values: days.map((d) => d.calls),
+              },
+              {
+                key: "promises",
+                label: "Promises",
+                stroke: "stroke-emerald-500",
+                fill: "bg-emerald-500",
+                area: "fill-emerald-200",
+                values: days.map((d) => d.promises),
+              },
+            ]}
+          />
         )}
       </div>
 
@@ -167,34 +181,51 @@ export function Analytics() {
               Share of the {outcomeTotal.toLocaleString("en-IN")} scored calls in this period.
             </p>
           )}
-          <div className="mt-4 space-y-2">
-            {outcomeTotal > 0 && (
-              <div className="flex items-center gap-3 border-b border-slate-100 pb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                <span className="flex-1">Outcome</span>
-                <span className="w-28 shrink-0 text-right">Calls · % of {outcomeTotal}</span>
-              </div>
-            )}
+          {outcomeTotal > 0 && (
+            <div className="mt-4">
+              {/* The whole period in one line before the detail under it. */}
+              <ShareBar
+                slices={outcomeRows.map((d, i) => ({
+                  key: d.code,
+                  label: labelForCode(d.code, labels[d.code]),
+                  n: d.count,
+                  fill: outcomeTones[d.code.toUpperCase()].fill,
+                  share: formatShare(outcomeShares[i]),
+                }))}
+              />
+            </div>
+          )}
+          <div className="mt-4 space-y-1.5">
             {outcomeRows.map((d, i) => {
-              const tone = dispositionTone(d.code);
+              const code = d.code.toUpperCase();
+              const name = labelForCode(d.code, labels[d.code]);
               const pct = outcomeShares[i];
               return (
-                <div key={d.code} className="flex items-center gap-3">
-                  <span className="w-12 shrink-0 font-mono text-[11px] font-semibold text-slate-700">
-                    {d.code}
+                <div
+                  key={d.code}
+                  className="flex items-center gap-2.5 text-xs"
+                  title={`${code} — ${d.count} of ${outcomeTotal} calls = ${(
+                    (d.count * 100) /
+                    outcomeTotal
+                  ).toFixed(2)}%`}
+                >
+                  <span
+                    className={`h-2.5 w-2.5 shrink-0 rounded-full ${outcomeTones[code].fill}`}
+                  />
+                  <span className="min-w-0 flex-1 truncate font-medium text-slate-700">{name}</span>
+                  {/* The code is what a client's own report calls it, so it stays - but as
+                      a chip that cannot run into the name beside it, which is what the two
+                      fixed-width columns here used to do. */}
+                  <span className="hidden max-w-[11rem] shrink-0 truncate rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-500 md:block">
+                    {code}
                   </span>
-                  <span className="hidden w-36 shrink-0 truncate text-xs text-slate-500 sm:block">
-                    {labels[d.code] || d.code}
-                  </span>
-                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                  <div className="h-2 w-28 shrink-0 overflow-hidden rounded-full bg-slate-100 sm:w-40">
                     <div
-                      className={`h-full rounded-full ${tone.bar}`}
+                      className={`h-full rounded-full ${outcomeTones[code].fill}`}
                       style={{ width: `${Math.max(pct, 1.5)}%` }}
                     />
                   </div>
-                  <span
-                    title={`${d.count} of ${outcomeTotal} calls = ${((d.count * 100) / outcomeTotal).toFixed(2)}%`}
-                    className="w-24 shrink-0 cursor-help text-right text-xs tabular-nums text-slate-600"
-                  >
+                  <span className="w-20 shrink-0 text-right tabular-nums text-slate-600">
                     {d.count}
                     <span className="ml-1.5 text-slate-400">{formatShare(pct)}</span>
                   </span>
@@ -202,9 +233,9 @@ export function Analytics() {
               );
             })}
             {outcomeTotal > 0 && (
-              <div className="flex items-center gap-3 border-t border-slate-100 pt-2 text-xs font-semibold text-slate-700">
+              <div className="flex items-center gap-2.5 border-t border-slate-100 pt-2 text-xs font-semibold text-slate-700">
                 <span className="flex-1">Total</span>
-                <span className="w-24 shrink-0 text-right tabular-nums">
+                <span className="w-20 shrink-0 text-right tabular-nums">
                   {outcomeTotal}
                   <span className="ml-1.5 text-slate-400">100%</span>
                 </span>
@@ -221,54 +252,39 @@ export function Analytics() {
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
           <h2 className="text-sm font-semibold text-slate-900">When calls connect</h2>
           <p className="mt-0.5 text-xs text-slate-500">
-            By hour of the Indian day. The darker part of each bar reached someone.
+            By hour of the Indian day: how many went out, and how many of them reached
+            someone.
             {callingHours.length === 2 && (
-              <> Calls are meant to go out between {callingHours[0]}:00 and {callingHours[1]}:00.</>
+              <> Calls are meant to go out between {callingHours[0]}:00 and {callingHours[1]}:00;
+              anything outside it is amber.</>
             )}
           </p>
-          {hours.length === 0 ? (
+          {(summary?.by_hour ?? []).length === 0 ? (
             <p className="mt-4 text-xs text-slate-400">No calls in this period.</p>
           ) : (
-            <div className="mt-4 flex h-36 items-end gap-1 overflow-x-auto">
-              {hours.map((h) => {
-                const height = (h.calls / busiestHour) * 100;
-                const share = h.calls ? (h.answered / h.calls) * 100 : 0;
-                const inWindow =
-                  callingHours.length !== 2 ||
-                  (h.hour >= callingHours[0] && h.hour < callingHours[1]);
-                return (
-                  <div
-                    key={h.hour}
-                    className="flex h-full min-w-[30px] flex-1 flex-col items-center gap-1"
-                    title={`${h.hour}:00 — ${h.calls} calls, ${h.answered} reached someone${
-                      inWindow ? "" : " (outside calling hours)"
-                    }`}
-                  >
-                    <span className="text-[9px] text-slate-400">{Math.round(share)}%</span>
-                    <div className="flex w-full flex-1 flex-col justify-end">
-                      <div
-                        className={`relative flex w-full flex-col justify-end overflow-hidden rounded-t ${
-                          inWindow ? "bg-indigo-200" : "bg-amber-200"
-                        }`}
-                        style={{ height: `${Math.max(height, 4)}%` }}
-                      >
-                        <div
-                          className={`w-full ${inWindow ? "bg-indigo-600" : "bg-amber-500"}`}
-                          style={{ height: `${share}%` }}
-                        />
-                      </div>
-                    </div>
-                    <span className="text-[9px] text-slate-400">{h.hour}</span>
-                  </div>
-                );
-              })}
-            </div>
+            <BarsWithLine
+              labels={hours.map((h) => String(h.hour))}
+              bars={hours.map((h) => h.calls)}
+              rates={hours.map((h) => (h.calls ? (h.answered / h.calls) * 100 : null))}
+              barClass={(i) =>
+                callingHours.length !== 2 ||
+                (hours[i].hour >= callingHours[0] && hours[i].hour < callingHours[1])
+                  ? "bg-indigo-500"
+                  : "bg-amber-400"
+              }
+              barLabel="Inside calling hours"
+              legendExtra={[{ label: "Outside", className: "bg-amber-400" }]}
+              lineLabel="Reached someone"
+              tooltip={(i) =>
+                `${hours[i].hour}:00 — ${hours[i].calls} calls, ${hours[i].answered} reached someone`
+              }
+            />
           )}
           {outsideHours > 0 && (
             <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
               <strong>{outsideHours}</strong> of {summary?.total ?? 0} calls went out outside{" "}
-              {callingHours[0]}:00–{callingHours[1]}:00 (shown in amber). Collection calls are
-              only allowed until 19:00.
+              {callingHours[0]}:00–{callingHours[1]}:00. Collection calls are only allowed
+              until 19:00.
             </p>
           )}
         </div>
@@ -278,30 +294,22 @@ export function Analytics() {
           <p className="mt-0.5 text-xs text-slate-500">
             What each attempt returned, so a retry policy is a decision rather than a guess.
           </p>
-          <div className="mt-4 space-y-2">
-            {attempts.map((a) => (
-              <div key={a.attempt} className="flex items-center gap-3 text-xs">
-                <span className="w-16 shrink-0 font-medium text-slate-700">
-                  Attempt {a.attempt}
-                </span>
-                <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
-                  <div
-                    className="h-full rounded-full bg-emerald-500"
-                    style={{ width: `${a.calls ? (a.promises / a.calls) * 100 : 0}%` }}
-                  />
-                </div>
-                <span className="w-28 shrink-0 text-right tabular-nums text-slate-600">
-                  {a.promises}/{a.calls} promised
-                </span>
-              </div>
-            ))}
-            {attempts.length === 0 && (
-              <p className="text-xs text-slate-400">
-                No attempt-numbered calls yet. Runs placed from now on record which try they
-                are, and this fills in.
-              </p>
-            )}
-          </div>
+          {attempts.length > 0 ? (
+            <Funnel
+              steps={attempts.map((a, i) => ({
+                label: `Attempt ${a.attempt}`,
+                total: a.calls,
+                won: a.promises,
+                wonLabel: "promised",
+                fill: ["bg-emerald-500", "bg-emerald-600", "bg-teal-600", "bg-cyan-600"][i % 4],
+              }))}
+            />
+          ) : (
+            <p className="mt-4 text-xs text-slate-400">
+              No attempt-numbered calls yet. Runs placed from now on record which try they
+              are, and this fills in.
+            </p>
+          )}
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -311,29 +319,24 @@ export function Analytics() {
               Share of the {languageTotal.toLocaleString("en-IN")} calls with a language.
             </p>
           )}
-          <div className="mt-4 space-y-3">
-            {languages.map((l, i) => {
-              const pct = languageShares[i];
-              return (
-                <div key={l.language}>
-                  <div className="flex items-baseline justify-between text-xs">
-                    <span className="font-medium capitalize text-slate-700">{l.language}</span>
-                    <span className="tabular-nums text-slate-500">
-                      {l.count} <span className="ml-1 text-slate-400">{formatShare(pct)}</span>
-                    </span>
-                  </div>
-                  <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-100">
-                    <div className="h-full rounded-full bg-indigo-500" style={{ width: `${pct}%` }} />
-                  </div>
-                </div>
-              );
-            })}
-            {languages.length === 0 && !isLoading && (
-              <p className="text-xs text-slate-400">No calls yet.</p>
-            )}
-          </div>
+          {languages.length > 0 ? (
+            <MiniDonut
+              total={languageTotal}
+              centreLabel="Calls"
+              slices={languages.map((l, i) => ({
+                key: l.language,
+                label: l.language,
+                n: l.count,
+                share: formatShare(languageShares[i]),
+                ...LANGUAGE_TONES[i % LANGUAGE_TONES.length],
+              }))}
+            />
+          ) : (
+            !isLoading && <p className="mt-4 text-xs text-slate-400">No calls yet.</p>
+          )}
         </div>
       </div>
+
 
       {/* Re-running the scorer over a past execution is a maintenance job, not something
           anyone opens this page for, so it stays folded away. */}

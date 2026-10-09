@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { biggestInWindow, buildPiles, shorten, type Pile } from "../components/Outcomes";
+import { niceStep } from "../components/scale";
 import { DispositionBadge } from "../components/Disposition";
 import { PhoneNumber } from "../components/PhoneNumber";
 import { formatShare, sharesOf } from "../components/shares";
@@ -221,17 +222,6 @@ function OutcomeDonut({ outcomes, spanQuery }: { outcomes: Outcomes; spanQuery: 
       </div>
     </div>
   );
-}
-
-/**
- * Rounds a chart's step up to 1, 2, 3, 5 or 10 times a power of ten, so the gridlines
- * read cleanly and the top is not far above the data. Without the 3, a nine-call day
- * stepped to 5 and drew an axis to 20 - the lines all squashed into the bottom quarter.
- */
-function niceStep(raw: number): number {
-  const power = 10 ** Math.floor(Math.log10(Math.max(raw, 1)));
-  const lead = raw / power;
-  return (lead <= 1 ? 1 : lead <= 2 ? 2 : lead <= 3 ? 3 : lead <= 5 ? 5 : 10) * power;
 }
 
 /**

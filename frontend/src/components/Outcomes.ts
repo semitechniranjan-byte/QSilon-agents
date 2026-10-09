@@ -99,10 +99,25 @@ const GROUP_TONES: Record<string, { stroke: string; fill: string }> = {
   wrong: { stroke: "stroke-violet-500", fill: "bg-violet-500" },
 };
 
-/** RESCHEDULE_REQUESTED -> "Reschedule requested", for a code nobody has labelled. */
+/**
+ * RESCHEDULE_REQUESTED -> "Reschedule requested", for a code nobody has labelled.
+ *
+ * Short all-capital words are left alone: lowercasing the lot turned NR into "Nr" and
+ * PTP into "Ptp", which is not what anyone on a collections desk calls them.
+ */
 export function prettifyCode(code: string): string {
-  const words = code.replace(/[_-]+/g, " ").trim().toLowerCase();
-  return words.charAt(0).toUpperCase() + words.slice(1);
+  const words = code
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    // Acronyms stay as they are; a four-letter word with a vowel in it is a word.
+    // Without the vowel test, SURGERY_CONFIRMED_WITH_QUESTIONS read "with" as one.
+    .map((w) =>
+      w === w.toUpperCase() && (w.length <= 3 || (w.length === 4 && !/[AEIOU]/.test(w)))
+        ? w
+        : w.toLowerCase(),
+    );
+  const text = words.join(" ");
+  return /^[a-z]/.test(text) ? text.charAt(0).toUpperCase() + text.slice(1) : text;
 }
 
 /** Cut a label to fit, keeping whole words where it can. */
@@ -254,4 +269,23 @@ export function biggestInWindow(piles: Pile[], counts: Record<string, number>, n
   );
   // Back into the ring's order, so the legend under the chart reads like the one beside it.
   return piles.filter((p) => chosen.has(p.key));
+}
+
+/**
+ * A colour for each disposition code, in the order given.
+ *
+ * Analytics lists every code rather than the piles, but the colours have to agree with
+ * the dashboard's: a code that belongs to one of the six keeps that pile's colour, and
+ * the rest take the palette in rank order, biggest first.
+ */
+export function tonesForCodes(codes: string[]): Record<string, { stroke: string; fill: string }> {
+  const out: Record<string, { stroke: string; fill: string }> = {};
+  let next = 0;
+  for (const raw of codes) {
+    const code = raw.toUpperCase();
+    if (out[code]) continue;
+    const group = OUTCOME_GROUPS.find((g) => g.codes.includes(code));
+    out[code] = group ? GROUP_TONES[group.key] : CODE_TONES[next++ % CODE_TONES.length];
+  }
+  return out;
 }
