@@ -593,7 +593,15 @@ export function CampaignDetail() {
                   {selectedRow?.session_id && (
                     <div className="space-y-3">
                       {selectedSession?.recording_url && (
-                        <audio controls src={selectedSession.recording_url} className="w-full" />
+                        <div className="space-y-1.5">
+                          <audio controls src={selectedSession.recording_url} className="w-full" />
+                          <a
+                            href={`${selectedSession.recording_url}&download=1`}
+                            className="inline-block text-xs font-medium text-indigo-600 hover:underline"
+                          >
+                            Download MP3
+                          </a>
+                        </div>
                       )}
                       <div className="max-h-96 space-y-2 overflow-y-auto">
                         {(selectedMessages ?? []).map((m, idx) => (

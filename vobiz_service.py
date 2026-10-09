@@ -29,16 +29,26 @@ logger = logging.getLogger(__name__)
 def sniff_audio_type(audio: bytes) -> str:
     """The real media type of a recording, read from its first bytes.
 
-    A player that is handed the wrong type refuses to play, and the carrier's own
-    content-type is documented as unreliable.
+    A player handed the wrong type refuses to play it, and a browser saving one names the
+    file after the type - which is how a perfectly good mp3 came down as ``.bin``.
+
+    An mp3 frame begins with eleven sync bits, so the test is the whole of the first byte
+    and the top three of the second, not a list of the byte pairs seen so far: Vobiz's
+    8 kHz recordings start ``ff e3`` (MPEG 2.5 Layer III), where a music file would more
+    often start ``ff fb``.
     """
-    if audio[:3] == b"ID3" or audio[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+    if audio[:3] == b"ID3":
+        return "audio/mpeg"
+    if len(audio) >= 2 and audio[0] == 0xFF and (audio[1] & 0xE0) == 0xE0:
         return "audio/mpeg"
     if audio[:4] == b"RIFF" and audio[8:12] == b"WAVE":
         return "audio/wav"
     if audio[:4] == b"OggS":
         return "audio/ogg"
-    return "application/octet-stream"
+    if audio[4:8] == b"ftyp":
+        # An MPEG-4 container - .mp4 for video, .m4a when it holds only audio.
+        return "audio/mp4" if audio[8:12] in (b"M4A ", b"M4B ") else "video/mp4"
+    return ""
 
 
 class VobizVoiceService:
@@ -241,7 +251,13 @@ class VobizVoiceService:
                     body = (await response.text())[:200]
                     raise RuntimeError(f"Vobiz returned {response.status} for the recording: {body}")
                 audio = await response.read()
-        return audio, sniff_audio_type(audio)
+                served_as = (response.headers.get("Content-Type") or "").split(";")[0].strip()
+        # The bytes decide. Their header is the fallback when the bytes say nothing, and
+        # it is ignored when it says something generic - which is what a download of
+        # application/octet-stream would otherwise become.
+        if served_as.startswith(("audio/", "video/")):
+            return audio, sniff_audio_type(audio) or served_as
+        return audio, sniff_audio_type(audio) or "application/octet-stream"
 
     def build_speak_response(self, text: str) -> str:
         """Plain <Speak> fallback, used only when the stream cannot be opened."""

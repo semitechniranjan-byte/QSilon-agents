@@ -1434,8 +1434,16 @@ async def get_recording(
         logger.error("Recording fetch failed for %s: %s", session_id, exc)
         raise HTTPException(status_code=502, detail="the recording could not be fetched") from exc
 
-    suffix = {"audio/mpeg": "mp3", "audio/wav": "wav", "audio/ogg": "ogg"}.get(media_type, "bin")
-    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)
+    suffix = {
+        "audio/mpeg": "mp3", "audio/wav": "wav", "audio/ogg": "ogg",
+        "audio/mp4": "m4a", "video/mp4": "mp4",
+    }.get(media_type, "bin")
+    # Named after the call, not after the session row: a folder of downloads should say
+    # who was rung and when without opening anything.
+    started = session.get("created_at")
+    stamp = started.strftime("%Y%m%d-%H%M") if hasattr(started, "strftime") else ""
+    label = "-".join(p for p in (session.get("phone_number") or session_id, stamp) if p)
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", label).strip("_") or "recording"
     return Response(
         content=audio,
         media_type=media_type,

@@ -121,10 +121,19 @@ print("only the carrier's own hosts are fetched")
 
 assert sniff_audio_type(b"ID3\x04\x00") == "audio/mpeg"
 assert sniff_audio_type(b"\xff\xfb\x90\x00") == "audio/mpeg"
+# What Vobiz actually sends: MPEG 2.5 Layer III at 8 kHz. Testing byte pairs against a
+# list of the ones seen so far missed this, and a good mp3 came down named ".bin".
+assert sniff_audio_type(b"\xff\xe3\x48\x04\x00\x00") == "audio/mpeg"
+for second in (0xE0, 0xE3, 0xF2, 0xF3, 0xFA, 0xFB, 0xFF):
+    assert sniff_audio_type(bytes([0xFF, second, 0, 0])) == "audio/mpeg", hex(second)
+assert sniff_audio_type(b"\xff\x0f\x00\x00") == "", "not a frame sync"
 assert sniff_audio_type(b"RIFF\x24\x00\x00\x00WAVEfmt ") == "audio/wav"
 assert sniff_audio_type(b"OggS\x00\x02") == "audio/ogg"
-assert sniff_audio_type(b"<html>not audio") == "application/octet-stream"
-assert sniff_audio_type(b"") == "application/octet-stream"
+assert sniff_audio_type(b"\x00\x00\x00\x20ftypM4A \x00\x00") == "audio/mp4"
+assert sniff_audio_type(b"\x00\x00\x00\x20ftypisom\x00\x00") == "video/mp4"
+assert sniff_audio_type(b"<html>not audio") == ""
+assert sniff_audio_type(b"") == ""
+assert sniff_audio_type(b"\xff") == "", "one byte is not enough to decide"
 print("audio type read from the first bytes, not the extension")
 
 print("ALL RECORDING TESTS PASSED")

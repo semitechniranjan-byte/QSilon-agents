@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { DispositionBadge } from "../components/Disposition";
+import { IconDownload } from "../components/Icons";
 import { PhoneNumber } from "../components/PhoneNumber";
 import { useParams, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -253,7 +254,16 @@ export function SessionDetail() {
 
           {session?.recording_url && (
             <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <h2 className="text-sm font-semibold text-slate-900">Recording</h2>
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold text-slate-900">Recording</h2>
+                <a
+                  href={`${session.recording_url}&download=1`}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                >
+                  <IconDownload size={13} />
+                  Download MP3
+                </a>
+              </div>
               <audio controls src={session.recording_url} className="mt-2 w-full" />
             </div>
           )}
