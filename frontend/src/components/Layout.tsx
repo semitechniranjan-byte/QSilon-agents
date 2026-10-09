@@ -136,9 +136,11 @@ export function Layout({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-6 py-3">
+        {/* The same navy as the sidebar, so the chrome around the work is one piece
+            rather than a white strip sitting on top of a white page. */}
+        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-black/20 bg-[var(--app-sidebar)] px-6 py-3">
           <span className="truncate font-mono text-xs text-slate-400">{apiUrl}</span>
-          <span className="flex shrink-0 items-center gap-2 rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600">
+          <span className="flex shrink-0 items-center gap-2 rounded-md border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-medium text-slate-200">
             <span className={`h-1.5 w-1.5 rounded-full ${statusDot}`} />
             {statusLabel}
           </span>

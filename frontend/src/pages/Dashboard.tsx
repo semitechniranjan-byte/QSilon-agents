@@ -134,7 +134,7 @@ function OutcomeDonut({ outcomes, spanQuery }: { outcomes: Outcomes; spanQuery: 
 
   return (
     <div className="mt-3 flex flex-1 items-center gap-5">
-      <svg viewBox="0 0 120 120" className="h-40 w-40 shrink-0 -rotate-90">
+      <svg viewBox="0 0 120 120" className="h-40 w-40 shrink-0 self-start -rotate-90">
         {slices.map((s) => {
           const length = (s.n / outcomes.analysed) * circumference;
           // A 2px gap between slices; a lone slice is a whole ring.
@@ -181,7 +181,7 @@ function OutcomeDonut({ outcomes, spanQuery }: { outcomes: Outcomes; spanQuery: 
         </text>
       </svg>
 
-      <div className="min-w-0 flex-1 space-y-0.5 overflow-y-auto">
+      <div className="min-w-0 flex-1 space-y-0.5">
         {outcomes.piles.map((p) => {
           const row = (
             <>
@@ -280,9 +280,9 @@ function ConversationsTrend({
 
   return (
     <div className="mt-3 flex flex-1 flex-col">
-      <div className="flex flex-1 gap-2">
+      <div className="flex min-h-36 flex-1 gap-2">
         {/* y axis */}
-        <div className="relative h-36 w-6 shrink-0 text-right text-[10px] tabular-nums text-slate-400">
+        <div className="relative w-6 shrink-0 text-right text-[10px] tabular-nums text-slate-400">
           {ticks.map((t) => (
             <span
               key={t}
@@ -293,8 +293,8 @@ function ConversationsTrend({
             </span>
           ))}
         </div>
-        <div className="flex-1">
-          <div className="relative h-36">
+        <div className="flex flex-1 flex-col">
+          <div className="relative flex-1">
             {/* recessive gridlines */}
             {ticks.map((t) => (
               <div
