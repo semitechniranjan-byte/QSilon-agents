@@ -28,25 +28,12 @@ import {
   IconArrowRight,
   IconCampaign,
   IconChart,
-  IconCpu,
-  IconDatabase,
   IconHourglass,
   IconMessage,
-  IconMic,
-  IconSpeaker,
   IconTable,
   IconTemplate,
 } from "../components/Icons";
 import type { ComponentType, ReactNode } from "react";
-
-/** Vendor names stay server-side; the console only shows the capability and its state. */
-type Capability = {
-  key: string;
-  Icon: ComponentType<{ size?: number }>;
-  label: string;
-  description: string;
-  ready: boolean | undefined;
-};
 
 const KPI_TONES = {
   blue: { card: "border-blue-100 bg-blue-50/60", icon: "bg-blue-100 text-blue-600" },
@@ -551,38 +538,10 @@ export function Dashboard() {
     };
   }, [summary, dispositionLabels]);
 
-  const capabilities: Capability[] = [
-    {
-      key: "db",
-      Icon: IconDatabase,
-      label: "Data store",
-      description: "Sessions, dialler runs and transcripts",
-      ready: health?.mongo_ready,
-    },
-    {
-      key: "stt",
-      Icon: IconMic,
-      label: "Speech recognition",
-      description: "Transcribes the caller in real time",
-      ready: health?.stt_ready,
-    },
-    {
-      key: "llm",
-      Icon: IconCpu,
-      label: "Conversation engine",
-      description: "Decides what the agent says next",
-      ready: health?.llm_ready,
-    },
-    {
-      key: "tts",
-      Icon: IconSpeaker,
-      label: "Voice synthesis",
-      description: "Speaks the reply back to the caller",
-      ready: health?.tts_ready,
-    },
-  ];
-
-  const allReady = capabilities.every((c) => c.ready);
+  // The badge in the header is all that is left of the health panel: a client wants to
+  // know the thing is up, not which four services it is made of.
+  const allReady = [health?.mongo_ready, health?.stt_ready, health?.llm_ready, health?.tts_ready]
+    .every(Boolean);
   const days = summary?.by_day ?? [];
 
   return (
@@ -689,65 +648,28 @@ export function Dashboard() {
         <RecentCalls sessions={sessions ?? []} labels={dispositionLabels} />
       </Panel>
 
-      {/* System health and quick actions */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
-        <Panel
-          title="System health"
-          sub="Core capabilities powering every call"
-          action={{ to: "/settings", label: "Settings" }}
-          className="lg:col-span-3"
-        >
-          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {capabilities.map(({ key, Icon, label, description, ready }) => (
-              <div
-                key={key}
-                title={description}
-                className="flex items-center gap-2.5 rounded-md border border-slate-200 px-2.5 py-2"
-              >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600">
-                  <Icon size={15} />
-                </span>
-                <div className="min-w-0">
-                  <div className="truncate text-xs font-medium text-slate-800">{label}</div>
-                  <div
-                    className={`flex items-center gap-1 text-[11px] font-medium ${
-                      ready ? "text-emerald-700" : "text-slate-500"
-                    }`}
-                  >
-                    <span
-                      className={`h-1.5 w-1.5 rounded-full ${ready ? "bg-emerald-500" : "bg-slate-400"}`}
-                    />
-                    {ready ? "Operational" : "Unavailable"}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Panel>
-
-        <Panel title="Quick actions" className="lg:col-span-2">
-          <div className="mt-3 grid grid-cols-4 gap-2">
-            {[
-              { to: "/campaigns", Icon: IconCampaign, label: "Start dialer", hint: "Pick a list and language", tone: "bg-emerald-50 text-emerald-600" },
-              { to: "/templates", Icon: IconTemplate, label: "Edit prompts", hint: "Use cases and languages", tone: "bg-violet-50 text-violet-600" },
-              { to: "/datasheets", Icon: IconTable, label: "Upload list", hint: "Add contacts to call", tone: "bg-blue-50 text-blue-600" },
-              { to: "/sessions", Icon: IconMessage, label: "Review transcripts", hint: "Listen back to calls", tone: "bg-amber-50 text-amber-600" },
-            ].map((a) => (
-              <Link
-                key={a.to}
-                to={a.to}
-                title={a.hint}
-                className="flex flex-col items-center gap-1.5 rounded-md px-1 py-2 text-center transition hover:bg-slate-50"
-              >
-                <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${a.tone}`}>
-                  <a.Icon size={17} />
-                </span>
-                <span className="text-[11px] font-medium leading-tight text-slate-700">{a.label}</span>
-              </Link>
-            ))}
-          </div>
-        </Panel>
-      </div>
+      <Panel title="Quick actions">
+        <div className="mt-3 grid grid-cols-4 gap-2">
+          {[
+            { to: "/campaigns", Icon: IconCampaign, label: "Start dialer", hint: "Pick a list and language", tone: "bg-emerald-50 text-emerald-600" },
+            { to: "/templates", Icon: IconTemplate, label: "Edit prompts", hint: "Use cases and languages", tone: "bg-violet-50 text-violet-600" },
+            { to: "/datasheets", Icon: IconTable, label: "Upload list", hint: "Add contacts to call", tone: "bg-blue-50 text-blue-600" },
+            { to: "/sessions", Icon: IconMessage, label: "Review transcripts", hint: "Listen back to calls", tone: "bg-amber-50 text-amber-600" },
+          ].map((a) => (
+            <Link
+              key={a.to}
+              to={a.to}
+              title={a.hint}
+              className="flex flex-col items-center gap-1.5 rounded-md px-1 py-2 text-center transition hover:bg-slate-50"
+            >
+              <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${a.tone}`}>
+                <a.Icon size={17} />
+              </span>
+              <span className="text-[11px] font-medium leading-tight text-slate-700">{a.label}</span>
+            </Link>
+          ))}
+        </div>
+      </Panel>
     </div>
   );
 }
