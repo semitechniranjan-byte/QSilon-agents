@@ -380,14 +380,14 @@ function ConversationsTrend({
 }
 
 /**
- * The calls themselves, newest first, refreshed while the page is open.
+ * The last three calls, newest first, refreshed while the page is open.
  *
  * Everything else here is a period being counted. Somebody placing a call wants to see
  * that call - during a demo especially - and was having to leave the dashboard to find
  * out whether it had landed.
  */
-function LatestCalls({ sessions, labels }: { sessions: Session[]; labels: Record<string, string> }) {
-  const rows = sessions.slice(0, 7);
+function RecentCalls({ sessions, labels }: { sessions: Session[]; labels: Record<string, string> }) {
+  const rows = sessions.slice(0, 3);
   if (rows.length === 0) {
     return (
       <p className="mt-3 rounded-lg border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
@@ -682,11 +682,11 @@ export function Dashboard() {
       </div>
 
       <Panel
-        title="Latest calls"
+        title="Recent calls"
         sub="Live - newest first, whoever placed them"
         action={{ to: "/sessions", label: "All conversations" }}
       >
-        <LatestCalls sessions={sessions ?? []} labels={dispositionLabels} />
+        <RecentCalls sessions={sessions ?? []} labels={dispositionLabels} />
       </Panel>
 
       {/* System health and quick actions */}
