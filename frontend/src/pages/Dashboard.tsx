@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { buildPiles, shorten, type Pile } from "../components/Outcomes";
+import { biggestInWindow, buildPiles, shorten, type Pile } from "../components/Outcomes";
 import { DispositionBadge } from "../components/Disposition";
 import { PhoneNumber } from "../components/PhoneNumber";
 import { formatShare, sharesOf } from "../components/shares";
@@ -252,15 +252,21 @@ function ConversationsTrend({
   piles: Pile[];
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  // Three lines at most, and the biggest three: taking them in legend order drew
-  // promises, refusals and payments while "Not reachable", the largest outcome there
-  // was, went undrawn.
-  const biggest = new Set([...piles].sort((a, b) => b.n - a.n).slice(0, 3).map((p) => p.key));
-  const series = piles
-    .filter((p) => biggest.has(p.key))
-    .map((p) => ({ key: p.key, label: p.label, fill: p.fill, stroke: p.stroke, codes: p.codes }));
+  const drawn = days.slice(-7);
 
-  const rows = days.slice(-7).map((d) => {
+  const recent: Record<string, number> = {};
+  for (const d of drawn) {
+    for (const [code, n] of Object.entries(d.codes ?? {})) recent[code] = (recent[code] ?? 0) + n;
+  }
+  const series = biggestInWindow(piles, recent).map((p) => ({
+    key: p.key,
+    label: p.label,
+    fill: p.fill,
+    stroke: p.stroke,
+    codes: p.codes,
+  }));
+
+  const rows = drawn.map((d) => {
     const codes = d.codes ?? {};
     const parts: Record<string, number> = {};
     for (const s of series) {

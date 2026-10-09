@@ -74,16 +74,20 @@ export const OUTCOME_GROUPS: OutcomeGroup[] = [
  * Colours for codes the six piles do not cover - a clinic's, a courier's, whatever the
  * next client's analysis prompt invents. Fixed list, assigned in the order the codes
  * appear, so one outcome keeps one colour across the ring, the legend and the trend.
+ *
+ * None of the six groups' hues are in here, and neither are the blue-greens either side
+ * of them. Indigo especially: index.css remaps that whole ramp to the brand teal, so a
+ * "bg-indigo-500" dot came out the same colour as every button on the page, sitting next
+ * to a cyan Not reachable nobody could tell it from.
  */
 const CODE_TONES = [
-  { stroke: "stroke-teal-500", fill: "bg-teal-500" },
-  { stroke: "stroke-indigo-500", fill: "bg-indigo-500" },
   { stroke: "stroke-orange-500", fill: "bg-orange-500" },
-  { stroke: "stroke-cyan-500", fill: "bg-cyan-500" },
   { stroke: "stroke-pink-500", fill: "bg-pink-500" },
   { stroke: "stroke-lime-600", fill: "bg-lime-600" },
-  { stroke: "stroke-sky-500", fill: "bg-sky-500" },
+  { stroke: "stroke-yellow-600", fill: "bg-yellow-600" },
   { stroke: "stroke-fuchsia-500", fill: "bg-fuchsia-500" },
+  { stroke: "stroke-purple-500", fill: "bg-purple-500" },
+  { stroke: "stroke-slate-500", fill: "bg-slate-500" },
 ];
 
 const GROUP_TONES: Record<string, { stroke: string; fill: string }> = {
@@ -91,7 +95,7 @@ const GROUP_TONES: Record<string, { stroke: string; fill: string }> = {
   refused: { stroke: "stroke-rose-500", fill: "bg-rose-500" },
   paid: { stroke: "stroke-blue-500", fill: "bg-blue-500" },
   callback: { stroke: "stroke-amber-500", fill: "bg-amber-500" },
-  unreached: { stroke: "stroke-slate-400", fill: "bg-slate-400" },
+  unreached: { stroke: "stroke-cyan-500", fill: "bg-cyan-500" },
   wrong: { stroke: "stroke-violet-500", fill: "bg-violet-500" },
 };
 
@@ -228,4 +232,26 @@ export function buildPiles(
       fill: "bg-slate-200",
     },
   ];
+}
+
+/**
+ * The `n` piles with the most calls inside one window of days.
+ *
+ * The trend draws a week, but its piles are built from the whole period, and on "All
+ * time" that is years of one client's outcomes - so this week's work could never reach
+ * the top three and the chart said nothing about it. Ranking happens on the window;
+ * the piles keep the colour and the name they have in the ring.
+ */
+export function biggestInWindow(piles: Pile[], counts: Record<string, number>, n = 3): Pile[] {
+  const inWindow = (p: Pile) => p.codes.reduce((t, c) => t + (counts[c] ?? 0), 0);
+  const chosen = new Set(
+    piles
+      // The lumped tail stands for several outcomes at once; it is not one line.
+      .filter((p) => p.key !== "__rest__" && inWindow(p) > 0)
+      .sort((a, b) => inWindow(b) - inWindow(a))
+      .slice(0, n)
+      .map((p) => p.key),
+  );
+  // Back into the ring's order, so the legend under the chart reads like the one beside it.
+  return piles.filter((p) => chosen.has(p.key));
 }
