@@ -134,7 +134,7 @@ function OutcomeDonut({ outcomes, spanQuery }: { outcomes: Outcomes; spanQuery: 
 
   return (
     <div className="mt-3 flex flex-1 items-center gap-5">
-      <svg viewBox="0 0 120 120" className="h-40 w-40 shrink-0 self-start -rotate-90">
+      <svg viewBox="0 0 120 120" className="h-52 w-52 shrink-0 self-start -rotate-90">
         {slices.map((s) => {
           const length = (s.n / outcomes.analysed) * circumference;
           // A 2px gap between slices; a lone slice is a whole ring.
@@ -223,20 +223,26 @@ function OutcomeDonut({ outcomes, spanQuery }: { outcomes: Outcomes; spanQuery: 
   );
 }
 
-/** Rounds a chart's top up to 1, 2 or 5 times a power of ten, so the gridlines read cleanly. */
+/**
+ * Rounds a chart's step up to 1, 2, 3, 5 or 10 times a power of ten, so the gridlines
+ * read cleanly and the top is not far above the data. Without the 3, a nine-call day
+ * stepped to 5 and drew an axis to 20 - the lines all squashed into the bottom quarter.
+ */
 function niceStep(raw: number): number {
   const power = 10 ** Math.floor(Math.log10(Math.max(raw, 1)));
   const lead = raw / power;
-  return (lead <= 1 ? 1 : lead <= 2 ? 2 : lead <= 5 ? 5 : 10) * power;
+  return (lead <= 1 ? 1 : lead <= 2 ? 2 : lead <= 3 ? 3 : lead <= 5 ? 5 : 10) * power;
 }
 
 /**
- * Calls per day, each bar split by outcome. Only the last seven days that had calls are
- * drawn: the panel shares a row with the outcomes, and a bar for every day of "All time"
- * would be too thin to read or hover. The Analytics page keeps the full run.
+ * Calls per day, one line per outcome. Only the last seven days that had calls are
+ * drawn: the panel shares a row with the outcomes, and a point for every day of "All
+ * time" would be too tight to read or hover. The Analytics page keeps the full run.
  *
- * The bands are the same piles as the ring beside it, in the same colours, rather than
- * three lending outcomes fixed in code - which left a clinic's whole week grey.
+ * The lines are the same piles as the ring beside it, in the same colours, rather than
+ * three lending outcomes fixed in code - which left a clinic's whole week grey. Stacked
+ * bars said what a day was made of; lines say which way each outcome is going, which is
+ * the question a trend is asked.
  */
 function ConversationsTrend({
   days,
@@ -246,33 +252,23 @@ function ConversationsTrend({
   piles: Pile[];
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  // Four bands at most: more than that in a 36px bar is a stack of slivers. The three
-  // are the *biggest* outcomes, not the first three in the legend - taking them in
-  // legend order drew promises, refusals and payments while "Not reachable", 44% of
-  // every call, fell into Others, so almost every bar came out plain grey.
-  const biggest = new Set(
-    [...piles].sort((a, b) => b.n - a.n).slice(0, 3).map((p) => p.key),
-  );
-  const series = [
-    ...piles
-      .filter((p) => biggest.has(p.key))
-      .map((p) => ({ key: p.key, label: p.label, fill: p.fill, codes: p.codes })),
-    // A shade off Not reachable's slate-300, which is usually one of the three.
-    { key: "others", label: "Others", fill: "bg-slate-200", codes: [] as string[] },
-  ];
+  // Three lines at most, and the biggest three: taking them in legend order drew
+  // promises, refusals and payments while "Not reachable", the largest outcome there
+  // was, went undrawn.
+  const biggest = new Set([...piles].sort((a, b) => b.n - a.n).slice(0, 3).map((p) => p.key));
+  const series = piles
+    .filter((p) => biggest.has(p.key))
+    .map((p) => ({ key: p.key, label: p.label, fill: p.fill, stroke: p.stroke, codes: p.codes }));
+
   const rows = days.slice(-7).map((d) => {
     const codes = d.codes ?? {};
     const parts: Record<string, number> = {};
-    let named = 0;
     for (const s of series) {
-      const n = s.codes.reduce((t, c) => t + (codes[c] ?? 0), 0);
-      parts[s.key] = n;
-      named += n;
+      parts[s.key] = s.codes.reduce((t, c) => t + (codes[c] ?? 0), 0);
     }
-    // Everything else that day, analysed or not yet scored, so the bar is the day's calls.
-    parts.others = Math.max(0, d.calls - named);
     return { date: d.date, calls: d.calls, parts };
   });
+
   const step = niceStep(Math.max(1, ...rows.map((d) => d.calls)) / 4);
   const top = step * 4;
   const ticks = [4, 3, 2, 1, 0].map((i) => i * step);
@@ -287,9 +283,19 @@ function ConversationsTrend({
     );
   }
 
+  // Percentages, so the lines stretch with the panel instead of needing a measured width.
+  // Inset at both ends: at a flat 0-100 the first and last points sat half outside the
+  // plot, and their dates had nowhere to sit under them.
+  const PAD = 7;
+  const x = (i: number) =>
+    rows.length === 1 ? 50 : PAD + (i / (rows.length - 1)) * (100 - 2 * PAD);
+  const y = (v: number) => 100 - (v / top) * 100;
+  const path = (pick: (row: (typeof rows)[number]) => number) =>
+    rows.map((r, i) => `${x(i)},${y(pick(r))}`).join(" ");
+
   return (
     <div className="mt-3 flex flex-1 flex-col">
-      <div className="flex min-h-36 flex-1 gap-2">
+      <div className="flex min-h-56 flex-1 gap-2">
         {/* y axis */}
         <div className="relative w-6 shrink-0 text-right text-[10px] tabular-nums text-slate-400">
           {ticks.map((t) => (
@@ -312,53 +318,114 @@ function ConversationsTrend({
                 style={{ top: `${100 - (t / top) * 100}%` }}
               />
             ))}
-            <div className="absolute inset-0 flex items-end justify-around gap-2 px-1">
+
+            {/* The lines. preserveAspectRatio="none" stretches the box to the panel;
+                non-scaling-stroke keeps the strokes an even width while it does. */}
+            <svg
+              viewBox="0 0 100 100"
+              preserveAspectRatio="none"
+              className="absolute inset-0 h-full w-full overflow-visible"
+            >
+              <polygon
+                points={`${x(0)},100 ${path((r) => r.calls)} ${x(rows.length - 1)},100`}
+                className="fill-slate-100"
+              />
+              <polyline
+                points={path((r) => r.calls)}
+                fill="none"
+                strokeWidth={1.5}
+                strokeDasharray="4 3"
+                vectorEffect="non-scaling-stroke"
+                className="stroke-slate-300"
+              />
+              {series.map((s) => (
+                <polyline
+                  key={s.key}
+                  points={path((r) => r.parts[s.key] ?? 0)}
+                  fill="none"
+                  strokeWidth={2}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  vectorEffect="non-scaling-stroke"
+                  className={s.stroke}
+                />
+              ))}
+            </svg>
+
+            {/* Points, as elements rather than SVG circles so the stretch does not turn
+                them into ovals. */}
+            {rows.map((d, i) =>
+              [
+                ...series.map((s) => ({
+                  key: s.key,
+                  v: d.parts[s.key] ?? 0,
+                  fill: s.fill,
+                  size: "h-2 w-2",
+                })),
+              ].map((pt) => (
+                <span
+                  key={`${d.date}-${pt.key}`}
+                  className={`absolute -translate-x-1/2 translate-y-1/2 rounded-full ring-2 ring-white transition ${pt.fill} ${pt.size} ${
+                    hover !== null && hover !== i ? "opacity-40" : ""
+                  }`}
+                  style={{ left: `${x(i)}%`, bottom: `${(pt.v / top) * 100}%` }}
+                />
+              )),
+            )}
+
+            {/* The guide and the card sit on the plot, not inside a column, so they line
+                up with the point rather than with the middle of a slice of width. */}
+            {hover !== null && (
+              <>
+                <span
+                  className="pointer-events-none absolute inset-y-0 w-px bg-slate-300"
+                  style={{ left: `${x(hover)}%` }}
+                />
+                <div
+                  className="pointer-events-none absolute top-0 z-10 w-44 rounded-lg border border-slate-200 bg-white p-2 text-[11px] shadow-lg"
+                  style={{
+                    left: `${x(hover)}%`,
+                    // Pinned to the point, pulled back at the right-hand edge so the card
+                    // stays inside the panel.
+                    transform: `translateX(${x(hover) > 60 ? "-100%" : x(hover) < 20 ? "0" : "-50%"})`,
+                  }}
+                >
+                  <div className="mb-1 font-semibold text-slate-900">
+                    {dayLabel(rows[hover].date)} · {rows[hover].calls} call
+                    {rows[hover].calls === 1 ? "" : "s"}
+                  </div>
+                  {series.map((s) => (
+                    <div key={s.key} className="flex items-center gap-1.5 text-slate-600">
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${s.fill}`} />
+                      <span className="min-w-0 flex-1 truncate">{s.label}</span>
+                      <span className="tabular-nums text-slate-900">
+                        {rows[hover].parts[s.key] ?? 0}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* One hit area per day, over the whole plot. */}
+            <div className="absolute inset-0 flex">
               {rows.map((d, i) => (
                 <div
                   key={d.date}
-                  className="relative flex h-full max-w-9 flex-1 cursor-default flex-col justify-end"
+                  className="flex-1"
                   onMouseEnter={() => setHover(i)}
                   onMouseLeave={() => setHover(null)}
-                >
-                  <div
-                    className={`flex w-full flex-col-reverse gap-[2px] transition ${
-                      hover !== null && hover !== i ? "opacity-50" : ""
-                    }`}
-                    style={{ height: `${(d.calls / top) * 100}%` }}
-                  >
-                    {series.map((s) =>
-                      d.parts[s.key] > 0 ? (
-                        <div
-                          key={s.key}
-                          className={`w-full ${s.fill} last:rounded-t`}
-                          style={{ flexGrow: d.parts[s.key], flexBasis: 0, minHeight: 2 }}
-                        />
-                      ) : null,
-                    )}
-                  </div>
-                  {hover === i && (
-                    <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 w-40 -translate-x-1/2 rounded-lg border border-slate-200 bg-white p-2 text-[11px] shadow-lg">
-                      <div className="mb-1 font-semibold text-slate-900">
-                        {dayLabel(d.date)} · {d.calls} call{d.calls === 1 ? "" : "s"}
-                      </div>
-                      {series
-                        .filter((s) => d.parts[s.key] > 0)
-                        .map((s) => (
-                          <div key={s.key} className="flex items-center gap-1.5 text-slate-600">
-                            <span className={`h-2 w-2 rounded-full ${s.fill}`} />
-                            <span className="min-w-0 flex-1 truncate">{s.label}</span>
-                            <span className="tabular-nums text-slate-900">{d.parts[s.key]}</span>
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                </div>
+                />
               ))}
             </div>
           </div>
-          <div className="mt-1 flex justify-around gap-2 px-1 text-[10px] text-slate-400">
-            {rows.map((d) => (
-              <span key={d.date} className="max-w-9 flex-1 text-center whitespace-nowrap">
+          <div className="relative mt-1 h-4 text-[10px] text-slate-400">
+            {rows.map((d, i) => (
+              <span
+                key={d.date}
+                className="absolute -translate-x-1/2 whitespace-nowrap"
+                style={{ left: `${x(i)}%` }}
+              >
                 {dayLabel(d.date)}
               </span>
             ))}
@@ -366,6 +433,10 @@ function ConversationsTrend({
         </div>
       </div>
       <div className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1 text-[11px] text-slate-500">
+        <span className="flex items-center gap-1.5">
+          <span className="h-0 w-3 border-t-2 border-dashed border-slate-300" />
+          All calls
+        </span>
         {series.map((s) => (
           <span key={s.key} className="flex items-center gap-1.5">
             <span className={`h-2 w-2 rounded-full ${s.fill}`} />

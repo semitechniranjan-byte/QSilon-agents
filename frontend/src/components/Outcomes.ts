@@ -91,7 +91,7 @@ const GROUP_TONES: Record<string, { stroke: string; fill: string }> = {
   refused: { stroke: "stroke-rose-500", fill: "bg-rose-500" },
   paid: { stroke: "stroke-blue-500", fill: "bg-blue-500" },
   callback: { stroke: "stroke-amber-500", fill: "bg-amber-500" },
-  unreached: { stroke: "stroke-slate-300", fill: "bg-slate-300" },
+  unreached: { stroke: "stroke-slate-400", fill: "bg-slate-400" },
   wrong: { stroke: "stroke-violet-500", fill: "bg-violet-500" },
 };
 
