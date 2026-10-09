@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { buildPiles, type Pile } from "../components/Outcomes";
+import { buildPiles, shorten, type Pile } from "../components/Outcomes";
 import { DispositionBadge } from "../components/Disposition";
 import { PhoneNumber } from "../components/PhoneNumber";
 import { formatShare, sharesOf } from "../components/shares";
@@ -175,7 +175,9 @@ function OutcomeDonut({ outcomes, spanQuery }: { outcomes: Outcomes; spanQuery: 
           transform="rotate(90 60 60)"
           className="fill-slate-400 text-[9px]"
         >
-          {hovered ? hovered.label : "Analysed"}
+          {/* A client's code can be thirty characters; at 9px inside a 92px ring that ran
+              out past the edge of the donut and over the panel. */}
+          {hovered ? shorten(hovered.label, 18) : "Analysed"}
         </text>
       </svg>
 
@@ -607,9 +609,11 @@ export function Dashboard() {
         />
       </div>
 
-      {/* Outcomes and trend */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      {/* Outcomes and trend. The outcome list is the page - it carries a row per outcome
+          and a client's codes are long - so it takes the wider half. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
         <Panel
+          className="lg:col-span-3"
           title="Call outcomes"
           sub={
             outcomes.analysed === 0
@@ -632,6 +636,7 @@ export function Dashboard() {
         </Panel>
 
         <Panel
+          className="lg:col-span-2"
           title="Conversations trend"
           sub={days.length > 7 ? "Last 7 days with calls" : "Calls per day"}
           action={{ to: "/analytics", label: "Analytics" }}
@@ -640,36 +645,39 @@ export function Dashboard() {
         </Panel>
       </div>
 
-      <Panel
-        title="Recent calls"
-        sub="Live - newest first, whoever placed them"
-        action={{ to: "/sessions", label: "All conversations" }}
-      >
-        <RecentCalls sessions={sessions ?? []} labels={dispositionLabels} />
-      </Panel>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
+        <Panel
+          className="lg:col-span-3"
+          title="Recent calls"
+          sub="Live - newest first, whoever placed them"
+          action={{ to: "/sessions", label: "All conversations" }}
+        >
+          <RecentCalls sessions={sessions ?? []} labels={dispositionLabels} />
+        </Panel>
 
-      <Panel title="Quick actions">
-        <div className="mt-3 grid grid-cols-4 gap-2">
-          {[
-            { to: "/campaigns", Icon: IconCampaign, label: "Start dialer", hint: "Pick a list and language", tone: "bg-emerald-50 text-emerald-600" },
-            { to: "/templates", Icon: IconTemplate, label: "Edit prompts", hint: "Use cases and languages", tone: "bg-violet-50 text-violet-600" },
-            { to: "/datasheets", Icon: IconTable, label: "Upload list", hint: "Add contacts to call", tone: "bg-blue-50 text-blue-600" },
-            { to: "/sessions", Icon: IconMessage, label: "Review transcripts", hint: "Listen back to calls", tone: "bg-amber-50 text-amber-600" },
-          ].map((a) => (
-            <Link
-              key={a.to}
-              to={a.to}
-              title={a.hint}
-              className="flex flex-col items-center gap-1.5 rounded-md px-1 py-2 text-center transition hover:bg-slate-50"
-            >
-              <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${a.tone}`}>
-                <a.Icon size={17} />
-              </span>
-              <span className="text-[11px] font-medium leading-tight text-slate-700">{a.label}</span>
-            </Link>
-          ))}
-        </div>
-      </Panel>
+        <Panel className="lg:col-span-2" title="Quick actions">
+          <div className="mt-3 grid grid-cols-4 gap-2">
+            {[
+              { to: "/campaigns", Icon: IconCampaign, label: "Start dialer", hint: "Pick a list and language", tone: "bg-emerald-50 text-emerald-600" },
+              { to: "/templates", Icon: IconTemplate, label: "Edit prompts", hint: "Use cases and languages", tone: "bg-violet-50 text-violet-600" },
+              { to: "/datasheets", Icon: IconTable, label: "Upload list", hint: "Add contacts to call", tone: "bg-blue-50 text-blue-600" },
+              { to: "/sessions", Icon: IconMessage, label: "Review transcripts", hint: "Listen back to calls", tone: "bg-amber-50 text-amber-600" },
+            ].map((a) => (
+              <Link
+                key={a.to}
+                to={a.to}
+                title={a.hint}
+                className="flex flex-col items-center gap-1.5 rounded-md px-1 py-2 text-center transition hover:bg-slate-50"
+              >
+                <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${a.tone}`}>
+                  <a.Icon size={17} />
+                </span>
+                <span className="text-[11px] font-medium leading-tight text-slate-700">{a.label}</span>
+              </Link>
+            ))}
+          </div>
+        </Panel>
+      </div>
     </div>
   );
 }

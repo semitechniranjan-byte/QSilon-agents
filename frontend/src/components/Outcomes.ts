@@ -101,6 +101,32 @@ export function prettifyCode(code: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+/** Cut a label to fit, keeping whole words where it can. */
+export function shorten(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+/**
+ * What to call one outcome on a chart.
+ *
+ * Labels come from the scripts' own outcome tables, where an entry is as likely to be a
+ * sentence of instructions to the model as a name - "Booking confirmed - service, date
+ * and time all agreed" - and is sometimes just the code again. A legend needs a few
+ * words, so: the code prettified when there is no real label, otherwise the part before
+ * the explanation starts, cut to fit.
+ */
+export function labelForCode(code: string, label?: string): string {
+  const raw = (label ?? "").trim();
+  if (!raw || raw.toUpperCase().replace(/[\s_-]+/g, "") === code.toUpperCase().replace(/[\s_-]+/g, "")) {
+    return prettifyCode(code);
+  }
+  const head = raw.split(/\s[—–-]\s|[:;(]/)[0].trim();
+  return shorten(head.length >= 4 ? head : raw, 34);
+}
+
 const CODE_SHAPE = /^[A-Za-z0-9_-]{1,48}$/;
 
 /** A single disposition code standing in for a group, so one code can be opened like one. */
@@ -175,7 +201,7 @@ export function buildPiles(
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([code, n], i) => ({
       key: code,
-      label: labels[code] || prettifyCode(code),
+      label: labelForCode(code, labels[code]),
       codes: [code],
       n,
       hint: code,
